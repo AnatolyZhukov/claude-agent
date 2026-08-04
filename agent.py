@@ -175,8 +175,9 @@ def run_tool(name, tool_input):
     raise ValueError(f"Unknown tool: {name}")
 
 
-def ask(question: str) -> str:
-    messages = [{"role": "user", "content": question}]
+def ask(question: str, history: list = None) -> str:
+    messages = list(history) if history else []
+    messages.append({"role": "user", "content": question})
 
     create_kwargs = dict(
         model="claude-haiku-4-5-20251001",
