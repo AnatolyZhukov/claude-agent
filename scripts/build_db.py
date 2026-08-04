@@ -1,7 +1,8 @@
 """
 Converts the Sample Superstore .xls export into a SQLite database.
 
-Usage: python scripts/build_db.py path/to/sample_superstore.xls
+Usage: python scripts/build_db.py [path/to/sample_superstore.xls]
+Defaults to the bundled scripts/sample_superstore.xls if no path is given.
 """
 import re
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy import create_engine
 
+DEFAULT_SOURCE_PATH = Path(__file__).parent / "sample_superstore.xls"
 DB_PATH = Path(__file__).parent.parent / "data" / "sample_superstore.db"
 
 SHEET_TO_TABLE = {
@@ -26,11 +28,7 @@ def to_snake_case(column: str) -> str:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python scripts/build_db.py path/to/sample_superstore.xls")
-        sys.exit(1)
-
-    source_path = Path(sys.argv[1])
+    source_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE_PATH
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{DB_PATH}")
 
