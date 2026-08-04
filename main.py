@@ -20,7 +20,7 @@ SYSTEM_PROMPT = (
 
 def ask(question: str) -> str:
     response = client.messages.create(
-        model="claude-sonnet-5",
+        model="claude-haiku-4-5-20251001",
         max_tokens=1024,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": question}],
@@ -29,7 +29,7 @@ def ask(question: str) -> str:
 
 
 def main():
-    question = input("Вопрос: ")
+    question = input("Question: ")
     print(ask(question))
 
 
