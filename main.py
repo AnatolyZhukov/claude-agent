@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-client = Anthropic(api_key=os.getenv("antropic_api_key"))
+client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 SYSTEM_PROMPT = (
     "You are an analyst assistant for the sample_superstore database. "
@@ -25,12 +25,19 @@ def ask(question: str) -> str:
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": question}],
     )
-    return response.content[0].text
+    return "\n".join(
+        block.text for block in response.content if block.type == "text"
+    )
 
 
 def main():
     question = input("Question: ")
-    print(ask(question))
+    try:
+        answer = ask(question)
+    except Exception as e:
+        print(f"Error: {e}")
+        return
+    print(answer)
 
 
 if __name__ == "__main__":
