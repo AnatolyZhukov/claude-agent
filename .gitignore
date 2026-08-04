@@ -3,3 +3,4 @@ venv/
 .vscode/
 .claude/skills/
 CLAUDE.md
+__pycache__/
