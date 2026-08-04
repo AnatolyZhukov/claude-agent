@@ -22,14 +22,24 @@ returns(order_id, returned)
 
 region values: Central, East, South, West
 category values: Office Supplies, Furniture, Technology
-dates are stored as YYYY-MM-DD"""
+order_date/ship_date are stored as full timestamps, e.g. '2025-12-31 00:00:00.000000' —
+when writing raw SQL with BETWEEN/comparisons on these columns, always wrap them in
+date(order_date) and compare against plain 'YYYY-MM-DD' strings, otherwise the last day
+of a range is silently excluded (a bare 'YYYY-MM-DD' string sorts before the timestamped
+value for that same day).
+The data covers order dates from 2023-01-03 to 2026-12-30. This range is a fact about
+this dataset, not a real-world constraint — do not refuse or claim data is unavailable
+for any year in or near this range based on assumptions about "the future"; always call
+a tool to check instead of guessing."""
 
 SYSTEM_PROMPT = (
     "You are an analyst assistant for the sample_superstore database. "
     "You must ALWAYS use one of the available tools to answer any question "
     "about metrics (sales, profit, orders, customers, regions, etc.) — "
     "prefer get_revenue and get_active_users when they fit, and fall back to "
-    "query_database (raw SQL) for anything else. "
+    "query_database (raw SQL) for anything else. Never answer from assumption "
+    "or refuse before calling a tool — the tool result is authoritative, even "
+    "if it contradicts what you'd expect. "
     "Never guess or invent numbers — only report what a tool returns. "
     "If a tool call fails, tell the user clearly what went wrong instead of "
     "guessing an answer. "
@@ -134,7 +144,7 @@ def run_select(sql: str) -> str:
 
 
 def get_revenue(start_date: str, end_date: str, region: str = None, category: str = None) -> str:
-    sql = "SELECT SUM(sales) FROM orders WHERE order_date BETWEEN :start AND :end"
+    sql = "SELECT SUM(sales) FROM orders WHERE date(order_date) BETWEEN :start AND :end"
     params = {"start": start_date, "end": end_date}
     if region:
         sql += " AND region = :region"
@@ -152,7 +162,7 @@ def get_revenue(start_date: str, end_date: str, region: str = None, category: st
 def get_active_users(start_date: str, end_date: str) -> str:
     sql = (
         "SELECT COUNT(DISTINCT customer_id) FROM orders "
-        "WHERE order_date BETWEEN :start AND :end"
+        "WHERE date(order_date) BETWEEN :start AND :end"
     )
     with engine.connect() as conn:
         count = conn.execute(text(sql), {"start": start_date, "end": end_date}).scalar()
