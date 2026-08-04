@@ -33,14 +33,41 @@ tools = [
             },
             "required": ["query_description"],
         },
-    }
-]
+    },
+    {
+        "name": "get_revenue",
+        "description": "Get total revenue (sum) for a given date range, optionally filtered by region/category.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+                "filters": {"type": "string", "description": "Optional filter description, e.g. region or category"}
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_active_users",
+        "description": "Get the number of distinct/unique active users for a given date range. "
+                        "This is a non-additive metric — always computed as COUNT(DISTINCT user_id) "
+                        "over the full requested range, never summed from smaller periods.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+
+] 
 
 
 def run_tool(name, tool_input):
-    if name == "query_database":
-        # TODO: replace with a real DB connection.
-        # For now there is no database configured, so we report that honestly.
+    # TODO: replace each branch with a real DB query once the DB is connected.
+    if name in ("query_database", "get_revenue", "get_active_users"):
         return "Error: no database connection is configured. Data is unavailable."
     raise ValueError(f"Unknown tool: {name}")
 
