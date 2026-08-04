@@ -22,7 +22,10 @@ SYSTEM_PROMPT = (
 tools = [
     {
         "name": "query_database",
-        "description": "Run a query against the sample_superstore database and return the result.",
+        "description": "Run an ad-hoc query against the sample_superstore database. "
+                        "Use ONLY for metrics not covered by the other tools "
+                        "(e.g. order count, profit breakdowns, customer/category lookups). "
+                        "Prefer get_revenue for revenue and get_active_users for active users.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -62,7 +65,27 @@ tools = [
         },
     },
 
-] 
+]
+
+# Skills attach through the request's container, not through `tools`, but we
+# declare them right next to `tools` since both describe agent capabilities.
+# Add more dicts here if more Skills get uploaded later.
+skills = [
+    {
+        "type": "custom",
+        "skill_id": os.getenv("SKILL_ID"),
+        "version": "latest",
+    }
+] if os.getenv("SKILL_ID") else []
+
+# Only needed if the attached Skill runs bundled scripts rather than just
+# returning a text procedure. Set SKILL_USES_CODE_EXECUTION=1 in .env if so.
+skill_needs_code_execution = bool(skills) and os.getenv(
+    "SKILL_USES_CODE_EXECUTION", ""
+).lower() in ("1", "true", "yes")
+
+if skill_needs_code_execution:
+    tools.append({"type": "code_execution_20250825", "name": "code_execution"})
 
 
 def run_tool(name, tool_input):
@@ -75,20 +98,35 @@ def run_tool(name, tool_input):
 def ask(question: str) -> str:
     messages = [{"role": "user", "content": question}]
 
+    create_kwargs = dict(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        tools=tools,
+        messages=messages,
+    )
+
+    if skills:
+        create = client.beta.messages.create
+        betas = ["skills-2025-10-02"]
+        if skill_needs_code_execution:
+            betas.append("code-execution-2025-08-25")
+        create_kwargs["betas"] = betas
+        create_kwargs["container"] = {"skills": skills}
+    else:
+        create = client.messages.create
+
     while True:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=tools,
-            messages=messages,
-        )
+        response = create(**create_kwargs)
 
         if response.stop_reason == "tool_use":
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = run_tool(block.name, block.input)
+                    try:
+                        result = run_tool(block.name, block.input)
+                    except Exception as e:
+                        result = f"Error: {e}"
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
