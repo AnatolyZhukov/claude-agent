@@ -110,13 +110,12 @@ skills = [
     }
 ] if os.getenv("SKILL_ID") else []
 
-# Only needed if the attached Skill runs bundled scripts rather than just
-# returning a text procedure. Set SKILL_USES_CODE_EXECUTION=1 in .env if so.
-skill_needs_code_execution = bool(skills) and os.getenv(
-    "SKILL_USES_CODE_EXECUTION", ""
-).lower() in ("1", "true", "yes")
-
-if skill_needs_code_execution:
+# The API requires a code_execution tool to be present whenever container.skills
+# is used at all — even for a Skill that's pure text and never runs code
+# (confirmed by testing: "container: skills can only be used when a code
+# execution tool is enabled"). So this is mandatory whenever any skill is set,
+# not just for skills that actually execute scripts.
+if skills:
     tools.append({"type": "code_execution_20250825", "name": "code_execution"})
 
 
@@ -199,10 +198,9 @@ def ask(question: str, history: list = None) -> str:
 
     if skills:
         create = client.beta.messages.create
-        betas = ["skills-2025-10-02"]
-        if skill_needs_code_execution:
-            betas.append("code-execution-2025-08-25")
-        create_kwargs["betas"] = betas
+        # code-execution beta is required alongside skills-2025-10-02 — see
+        # the comment above the `tools.append(code_execution...)` line.
+        create_kwargs["betas"] = ["skills-2025-10-02", "code-execution-2025-08-25"]
         create_kwargs["container"] = {"skills": skills}
     else:
         create = client.messages.create

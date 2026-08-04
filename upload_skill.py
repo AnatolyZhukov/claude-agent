@@ -12,7 +12,11 @@ SKILL_DIR = Path(__file__).parent / "skills" / "metric-aggregation-rules"
 
 
 def main():
-    files = [open(p, "rb") for p in SKILL_DIR.rglob("*") if p.is_file()]
+    files = [
+        (str(p.relative_to(SKILL_DIR.parent)), open(p, "rb"))
+        for p in sorted(SKILL_DIR.rglob("*"))
+        if p.is_file()
+    ]
     skill = client.beta.skills.create(
         display_title="Metric Aggregation Rules",
         files=files,
