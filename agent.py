@@ -43,10 +43,10 @@ SYSTEM_PROMPT = (
     "about metrics (sales, profit, orders, customers, regions, etc.) — "
     "prefer get_revenue and get_active_users when they fit, get_chart_data "
     "when the user wants a chart/plot/visualization or a breakdown over time "
-    "or by category/region, and fall back to query_database (raw SQL, "
-    "SELECT or WITH ... SELECT) for anything else, including multi-step "
-    "analyses like cohort retention — write it as one query using subqueries "
-    "or a WITH clause. Never answer from assumption "
+    "or by category/region, get_cohort_retention when the user wants monthly "
+    "or quarterly cohort/retention analysis (pass granularity), and fall "
+    "back to query_database (raw SQL, "
+    "SELECT or WITH ... SELECT) for anything else. Never answer from assumption "
     "or refuse before calling a tool — the tool result is authoritative, even "
     "if it contradicts what you'd expect. "
     "Never guess or invent numbers — only report what a tool returns. "
@@ -55,8 +55,12 @@ SYSTEM_PROMPT = (
     "The code_execution tool has NO access to the sample_superstore database "
     "or any real data — it can only read the metric-aggregation-rules Skill "
     "file. Never use code_execution to compute, simulate, or fetch metrics; "
-    "always use query_database/get_revenue/get_active_users/get_chart_data "
-    "for anything data-related, even for complex or multi-step analyses. "
+    "always use query_database/get_revenue/get_active_users/get_chart_data/"
+    "get_cohort_retention for anything data-related, even for complex or "
+    "multi-step analyses. get_chart_data and get_cohort_retention already "
+    "return everything needed for the app itself to render the chart/table — "
+    "never call code_execution to also plot, draw, or export an image after "
+    "one of these succeeds; just summarize the numbers in text. "
     "The database schema is:\n" + DB_SCHEMA + "\n"
     "If asked what you can do, respond: "
     "'I am an assistant for the sample_superstore database and can tell you about "
@@ -133,6 +137,27 @@ tools = [
             "properties": {
                 "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
                 "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+            },
+            "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_cohort_retention",
+        "description": "Get cohort retention for customers: each customer's cohort is the calendar "
+                        "month or quarter of their first order within the given date range, and for "
+                        "each following period it reports what percentage of that cohort placed at "
+                        "least one more order. Use this for any retention/cohort analysis question, "
+                        "instead of query_database or code_execution.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+                "granularity": {
+                    "type": "string",
+                    "enum": ["month", "quarter"],
+                    "description": "Cohort/period size. Defaults to month.",
+                },
             },
             "required": ["start_date", "end_date"],
         },
@@ -270,6 +295,104 @@ def get_active_users(start_date: str, end_date: str) -> str:
     return f"Distinct customers with at least one order in range: {count}"
 
 
+_PERIOD_SQL = {
+    "month": {
+        "period": "strftime('%Y-%m', {0})",
+        # (year*12 + month) as a single increasing integer, so subtracting
+        # two of these directly gives the number of months between them.
+        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 12 + CAST(substr({0}, 6, 2) AS INTEGER))",
+        "label": "Month",
+    },
+    "quarter": {
+        "period": "(strftime('%Y', {0}) || '-Q' || ((CAST(strftime('%m', {0}) AS INTEGER) - 1) / 3 + 1))",
+        # Same idea as month, but (year*4 + quarter) — quarter digit is the
+        # single character right after the literal "-Q" in e.g. "2023-Q1".
+        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 4 + CAST(substr({0}, 7, 1) AS INTEGER))",
+        "label": "Quarter",
+    },
+}
+
+
+def get_cohort_retention(start_date: str, end_date: str, granularity: str = "month") -> tuple[str, dict]:
+    # KeyError on an invalid granularity turns into "Error: ..." via the
+    # try/except around run_tool() in ask() — the input_schema enum should
+    # keep the model from sending anything else, but this is the real guard.
+    period_sql = _PERIOD_SQL[granularity]
+    period_expr = period_sql["period"]
+    index_expr = period_sql["index"]
+    label = period_sql["label"]
+
+    # offset 0 is always exactly the cohort (every member ordered in their
+    # own first period by definition), so cohort size is read off that row
+    # instead of a separate query.
+    sql = f"""
+        WITH first_orders AS (
+            SELECT customer_id, MIN(date(order_date)) AS first_date
+            FROM orders
+            WHERE date(order_date) BETWEEN :start AND :end
+            GROUP BY customer_id
+        ),
+        cohorts AS (
+            SELECT customer_id, {period_expr.format('first_date')} AS cohort_period
+            FROM first_orders
+        ),
+        customer_periods AS (
+            SELECT DISTINCT customer_id, {period_expr.format('date(order_date)')} AS order_period
+            FROM orders
+            WHERE date(order_date) BETWEEN :start AND :end
+        )
+        SELECT c.cohort_period,
+               ({index_expr.format('cp.order_period')}) - ({index_expr.format('c.cohort_period')})
+                   AS period_offset,
+               COUNT(DISTINCT cp.customer_id) AS active_customers
+        FROM cohorts c
+        JOIN customer_periods cp ON cp.customer_id = c.customer_id
+        GROUP BY c.cohort_period, period_offset
+        ORDER BY c.cohort_period, period_offset
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), {"start": start_date, "end": end_date}).fetchall()
+
+    chart = {
+        "title": f"{label}ly cohort retention ({start_date} to {end_date})",
+        "chart_type": "cohort_heatmap",
+        "period_label": label,
+        "cohorts": [],
+        "sizes": [],
+        "matrix": [],
+    }
+    if not rows:
+        return "No data.", chart
+
+    by_cohort = {}
+    for cohort_period, offset, active in rows:
+        by_cohort.setdefault(cohort_period, {})[offset] = active
+
+    cohorts = sorted(by_cohort)
+    sizes = [by_cohort[c][0] for c in cohorts]
+    max_offset = max(offset for offsets in by_cohort.values() for offset in offsets)
+
+    matrix = []
+    lines = []
+    for cohort_period, size in zip(cohorts, sizes):
+        row = []
+        cells = []
+        for period in range(1, max_offset + 1):
+            active = by_cohort[cohort_period].get(period)
+            pct = round(active / size * 100, 1) if active is not None else None
+            row.append(pct)
+            if pct is not None:
+                cells.append(f"{label.lower()} {period}: {pct}%")
+        matrix.append(row)
+        lines.append(f"Cohort {cohort_period} ({size} customers) — " + ", ".join(cells))
+
+    chart["cohorts"] = cohorts
+    chart["sizes"] = sizes
+    chart["matrix"] = matrix
+
+    return "\n".join(lines), chart
+
+
 def run_tool(name, tool_input):
     if name == "query_database":
         return run_select(tool_input["sql"])
@@ -282,6 +405,12 @@ def run_tool(name, tool_input):
         )
     if name == "get_active_users":
         return get_active_users(tool_input["start_date"], tool_input["end_date"])
+    if name == "get_cohort_retention":
+        return get_cohort_retention(
+            tool_input["start_date"],
+            tool_input["end_date"],
+            tool_input.get("granularity", "month"),
+        )
     if name == "get_chart_data":
         return get_chart_data(
             tool_input["metric"],
@@ -366,6 +495,12 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
         create = client.messages.create
 
     charts = []
+    # Plain-text results from successful, real tool calls made so far in this
+    # ask() — kept so that if the model later detours into an unsafe
+    # code_execution call (e.g. trying to plot/export an image after a chart
+    # tool already succeeded), we can still hand back the real data already
+    # fetched instead of a blanket refusal that would hide a correct answer.
+    tool_summaries = []
     # Guards our own client-side tool loop (e.g. a tool call that keeps
     # failing and getting retried) from growing the conversation without
     # bound. It does NOT cover code_execution runaways, since that tool is
@@ -388,6 +523,14 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
             ), charts
 
         if _has_unsafe_code_execution(response.content):
+            if tool_summaries:
+                # Real data was already fetched via a real tool before the
+                # model detoured into code_execution (typically trying to
+                # also plot/export an image after get_chart_data/
+                # get_cohort_retention already succeeded) — that detour is
+                # blocked, but the data itself is genuine, so surface it
+                # instead of discarding a correct answer.
+                return "\n\n".join(tool_summaries), charts
             return (
                 "I can't answer this — it led me to use a tool that has no "
                 "access to the real sample_superstore data, so I won't "
@@ -409,6 +552,8 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
                     if isinstance(result, tuple):
                         result, chart = result
                         charts.append(chart)
+                    if not str(result).startswith("Error:"):
+                        tool_summaries.append(str(result))
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
