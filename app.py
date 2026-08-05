@@ -68,44 +68,69 @@ def _cohort_table_html(chart):
     )
 
 
-st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊")
-st.title("Sample Superstore Analyst")
+st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+main_col, info_col = st.columns([3, 1], gap="large")
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+with info_col:
+    with st.container(border=True):
+        st.markdown("**What I can do**")
+        st.markdown(
+            "- Revenue & profit totals for any date range, filterable by "
+            "region/category\n"
+            "- Active users (unique customers) for a period\n"
+            "- Charts/breakdowns of revenue, profit, or orders by month, "
+            "region, category, or sub-category\n"
+            "- Cohort retention analysis, monthly or quarterly\n"
+            "- Ad-hoc read-only SQL for anything else"
+        )
+    with st.container(border=True):
+        st.markdown("**Roadmap**")
+        st.markdown(
+            "- Log every question/answer to a history view\n"
+            "- Thumbs up/down feedback on each answer\n"
+            "- Demo: dbt-style schema docs as the source of the DB schema "
+            "description"
+        )
 
-question = st.chat_input("Ask about sales, profit, orders, customers...")
+with main_col:
+    st.title("Sample Superstore Analyst")
 
-if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                answer, charts = ask(question, history=st.session_state.messages[:-1])
-            except Exception as e:
-                answer, charts = f"Error: {e}", []
-        st.markdown(answer)
-        # Charts render only for this turn — history replay above only stores
-        # plain {"role", "content"} text, so past charts aren't redrawn on rerun.
-        for chart in charts:
-            st.subheader(chart["title"])
-            if chart["chart_type"] == "cohort_heatmap":
-                if not chart["cohorts"]:
-                    st.write("No data.")
-                    continue
-                st.markdown(_cohort_table_html(chart), unsafe_allow_html=True)
-            else:
-                series = pd.Series(chart["data"], name=chart["title"])
-                if chart["chart_type"] == "line":
-                    st.line_chart(series)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    question = st.chat_input("Ask about sales, profit, orders, customers...")
+
+    if question:
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    answer, charts = ask(question, history=st.session_state.messages[:-1])
+                except Exception as e:
+                    answer, charts = f"Error: {e}", []
+            st.markdown(answer)
+            # Charts render only for this turn — history replay above only stores
+            # plain {"role", "content"} text, so past charts aren't redrawn on rerun.
+            for chart in charts:
+                st.subheader(chart["title"])
+                if chart["chart_type"] == "cohort_heatmap":
+                    if not chart["cohorts"]:
+                        st.write("No data.")
+                        continue
+                    st.markdown(_cohort_table_html(chart), unsafe_allow_html=True)
                 else:
-                    st.bar_chart(series)
+                    series = pd.Series(chart["data"], name=chart["title"])
+                    if chart["chart_type"] == "line":
+                        st.line_chart(series)
+                    else:
+                        st.bar_chart(series)
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+        st.session_state.messages.append({"role": "assistant", "content": answer})
