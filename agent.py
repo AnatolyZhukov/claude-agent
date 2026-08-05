@@ -2,7 +2,7 @@ import os
 import re
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APITimeoutError
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -347,6 +347,13 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
         system=SYSTEM_PROMPT,
         tools=tools,
         messages=messages,
+        # Without this, a question that sends the model down the
+        # code_execution path (see _has_unsafe_code_execution below) can
+        # have the API churn server-side for minutes with no way to cancel
+        # it, hanging the Streamlit app the whole time. This bounds that
+        # wait; _has_unsafe_code_execution still rejects the answer if it
+        # returns before the timeout but used code_execution unsafely.
+        timeout=60.0,
     )
 
     if skills:
@@ -369,7 +376,16 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
     MAX_TURNS = 8
 
     for _ in range(MAX_TURNS):
-        response = create(**create_kwargs)
+        try:
+            response = create(**create_kwargs)
+        except APITimeoutError:
+            return (
+                "This is taking too long to answer, likely because it led "
+                "me down a path with no real data to work with. Please "
+                "rephrase the question so it can be answered via a direct "
+                "database query (e.g. a specific metric, date range, or "
+                "breakdown)."
+            ), charts
 
         if _has_unsafe_code_execution(response.content):
             return (
