@@ -1,0 +1,19 @@
+.page-title {
+    text-align: center;
+}
+
+.cohort-table-wrapper {
+    overflow-x: auto;
+}
+
+.cohort-table {
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.cohort-table th,
+.cohort-table td {
+    padding: 4px 8px;
+    text-align: center;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+}
