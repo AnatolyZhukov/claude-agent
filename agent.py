@@ -43,13 +43,20 @@ SYSTEM_PROMPT = (
     "about metrics (sales, profit, orders, customers, regions, etc.) — "
     "prefer get_revenue and get_active_users when they fit, get_chart_data "
     "when the user wants a chart/plot/visualization or a breakdown over time "
-    "or by category/region, and fall back to query_database (raw SQL) for "
-    "anything else. Never answer from assumption "
+    "or by category/region, and fall back to query_database (raw SQL, "
+    "SELECT or WITH ... SELECT) for anything else, including multi-step "
+    "analyses like cohort retention — write it as one query using subqueries "
+    "or a WITH clause. Never answer from assumption "
     "or refuse before calling a tool — the tool result is authoritative, even "
     "if it contradicts what you'd expect. "
     "Never guess or invent numbers — only report what a tool returns. "
     "If a tool call fails, tell the user clearly what went wrong instead of "
     "guessing an answer. "
+    "The code_execution tool has NO access to the sample_superstore database "
+    "or any real data — it can only read the metric-aggregation-rules Skill "
+    "file. Never use code_execution to compute, simulate, or fetch metrics; "
+    "always use query_database/get_revenue/get_active_users/get_chart_data "
+    "for anything data-related, even for complex or multi-step analyses. "
     "The database schema is:\n" + DB_SCHEMA + "\n"
     "If asked what you can do, respond: "
     "'I am an assistant for the sample_superstore database and can tell you about "
@@ -158,8 +165,16 @@ MAX_ROWS = 200
 
 def run_select(sql: str) -> str:
     statement = sql.strip().rstrip(";")
-    if not re.match(r"(?is)^select\b", statement):
-        raise ValueError("Only SELECT statements are allowed.")
+    # WITH is allowed alongside SELECT so the model can write CTE-based
+    # analyses (e.g. cohort retention) as a single query instead of reaching
+    # for code_execution, which has no access to this database at all. This
+    # doesn't loosen the write protection: SQLite also allows "WITH ... AS
+    # (...) DELETE/UPDATE/INSERT ...", but the engine connection itself is
+    # opened read-only (see the comment above `engine`), so any such
+    # statement still fails at execution with "attempt to write a readonly
+    # database" regardless of what this regex lets through.
+    if not re.match(r"(?is)^(select|with)\b", statement):
+        raise ValueError("Only SELECT (optionally with a WITH clause) statements are allowed.")
     if ";" in statement:
         raise ValueError("Only a single statement is allowed.")
 
@@ -279,13 +294,56 @@ def run_tool(name, tool_input):
     raise ValueError(f"Unknown tool: {name}")
 
 
+def _is_safe_skill_read(block) -> bool:
+    # The only legitimate use of code_execution in this app: reading the
+    # metric-aggregation-rules Skill file, either via the text_editor "view"
+    # command or a plain "cat", both scoped to the read-only /skills/ folder
+    # the container mounts it under. Anything else touching code_execution
+    # (writing/running scripts, reading elsewhere) is out of scope — the
+    # model has no real access to sample_superstore through this tool, so
+    # using it for anything but reading the skill risks a fabricated answer.
+    name = getattr(block, "name", "") or ""
+    if "code_execution" not in name:
+        return False
+    inp = getattr(block, "input", None) or {}
+    cmd = inp.get("command", "")
+    path = inp.get("path", "")
+    if name == "text_editor_code_execution" and cmd == "view" and str(path).startswith("/skills/"):
+        return True
+    if name == "bash_code_execution" and isinstance(cmd, str) and cmd.strip().startswith("cat /skills/"):
+        return True
+    return False
+
+
+def _has_unsafe_code_execution(content_blocks) -> bool:
+    # Walks the block list in order so a *_tool_result block can be matched
+    # against the server_tool_use request that produced it — the result
+    # block alone doesn't carry the command/path needed to vet it.
+    safe_result_pending = False
+    for block in content_blocks:
+        if block.type == "server_tool_use":
+            if "code_execution" not in (getattr(block, "name", "") or ""):
+                safe_result_pending = False
+                continue
+            if _is_safe_skill_read(block):
+                safe_result_pending = True
+            else:
+                return True
+        elif "code_execution" in block.type:
+            if safe_result_pending:
+                safe_result_pending = False
+            else:
+                return True
+    return False
+
+
 def ask(question: str, history: list = None) -> tuple[str, list]:
     messages = list(history) if history else []
     messages.append({"role": "user", "content": question})
 
     create_kwargs = dict(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         tools=tools,
         messages=messages,
@@ -301,9 +359,26 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
         create = client.messages.create
 
     charts = []
+    # Guards our own client-side tool loop (e.g. a tool call that keeps
+    # failing and getting retried) from growing the conversation without
+    # bound. It does NOT cover code_execution runaways, since that tool is
+    # orchestrated server-side inside a single create() call and never
+    # returns control to this loop mid-flight — that risk is instead
+    # addressed by steering the model away from code_execution for data
+    # questions in SYSTEM_PROMPT.
+    MAX_TURNS = 8
 
-    while True:
+    for _ in range(MAX_TURNS):
         response = create(**create_kwargs)
+
+        if _has_unsafe_code_execution(response.content):
+            return (
+                "I can't answer this — it led me to use a tool that has no "
+                "access to the real sample_superstore data, so I won't "
+                "report numbers I can't verify. Please rephrase the question "
+                "so it can be answered via a direct database query (e.g. a "
+                "specific metric, date range, or breakdown)."
+            ), charts
 
         if response.stop_reason == "tool_use":
             tool_results = []
@@ -329,3 +404,6 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
 
         answer = "\n".join(block.text for block in response.content if block.type == "text")
         return answer, charts
+
+    return (f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
+            "Please try rephrasing the question or breaking it into smaller parts."), charts
