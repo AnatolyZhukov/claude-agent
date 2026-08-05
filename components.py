@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -82,3 +83,25 @@ def render_cohort_table_html(chart: dict) -> str:
         f"<thead>{header}</thead><tbody>{''.join(body_rows)}</tbody></table>"
         "</div>"
     )
+
+
+def render_chart(chart: dict):
+    st.subheader(chart["title"])
+    if chart["chart_type"] == "cohort_heatmap":
+        if not chart["cohorts"]:
+            st.write("No data.")
+            return
+        st.markdown(render_cohort_table_html(chart), unsafe_allow_html=True)
+    else:
+        series = pd.Series(chart["data"], name=chart["title"])
+        if chart["chart_type"] == "line":
+            st.line_chart(series)
+        else:
+            st.bar_chart(series)
+
+
+def render_message(message: dict):
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        for chart in message.get("charts", []):
+            render_chart(chart)

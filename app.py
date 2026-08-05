@@ -1,6 +1,5 @@
 import os
 
-import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -15,7 +14,7 @@ if "ANTHROPIC_API_KEY" not in os.environ:
         pass
 
 from agent import ask
-from components import inject_css, render_cohort_table_html, render_info_panel, render_title
+from components import inject_css, render_info_panel, render_message, render_title
 
 st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
 inject_css()
@@ -31,37 +30,36 @@ with main_col:
         st.session_state.messages = []
 
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        render_message(message)
 
-    question = st.chat_input("Ask about sales, profit, orders, customers...")
+    # A plain st.form instead of st.chat_input: chat_input always renders as
+    # a bar fixed to the bottom of the viewport, which overlaps whatever
+    # message happens to be scrolled underneath it. A form is a normal block
+    # element — it only ever sits right after the last message, in document
+    # flow, and scrolls away like everything else.
+    with st.form("question_form", clear_on_submit=True):
+        input_col, button_col = st.columns([8, 1])
+        with input_col:
+            question = st.text_input(
+                "Question",
+                placeholder="Ask about sales, profit, orders, customers...",
+                label_visibility="collapsed",
+            )
+        with button_col:
+            submitted = st.form_submit_button("Ask")
 
-    if question:
+    if submitted and question:
+        history = [
+            {"role": m["role"], "content": m["content"]} for m in st.session_state.messages
+        ]
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    answer, charts = ask(question, history=st.session_state.messages[:-1])
-                except Exception as e:
-                    answer, charts = f"Error: {e}", []
-            st.markdown(answer)
-            # Charts render only for this turn — history replay above only stores
-            # plain {"role", "content"} text, so past charts aren't redrawn on rerun.
-            for chart in charts:
-                st.subheader(chart["title"])
-                if chart["chart_type"] == "cohort_heatmap":
-                    if not chart["cohorts"]:
-                        st.write("No data.")
-                        continue
-                    st.markdown(render_cohort_table_html(chart), unsafe_allow_html=True)
-                else:
-                    series = pd.Series(chart["data"], name=chart["title"])
-                    if chart["chart_type"] == "line":
-                        st.line_chart(series)
-                    else:
-                        st.bar_chart(series)
-
-        st.session_state.messages.append({"role": "assistant", "content": answer})
+        with st.spinner("Thinking..."):
+            try:
+                answer, charts = ask(question, history=history)
+            except Exception as e:
+                answer, charts = f"Error: {e}", []
+        st.session_state.messages.append({"role": "assistant", "content": answer, "charts": charts})
+        # Rerun so the message loop above (which now includes this exchange)
+        # renders before the freshly-reset form, keeping the form pinned
+        # after the last message instead of appearing above it.
+        st.rerun()
