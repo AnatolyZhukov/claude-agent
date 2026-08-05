@@ -60,7 +60,7 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has three tools: `get_revenue` and `get_active_users` for common metrics, and `query_database` for anything else (raw SQL).
+- The agent has four tools: `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), and `query_database` for anything else (raw SQL).
 - `query_database` only ever executes `SELECT` statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 
@@ -72,7 +72,6 @@ Intended to be hosted on **Streamlit Community Cloud**, with access restricted t
 
 Planned next, not started yet:
 
-- **Charts & visualizations** — a new tool returns structured data (not text), and `app.py` renders it as a chart (`st.line_chart`/`st.bar_chart` or similar) instead of going through code execution.
 - **Chat history** — every question/answer logged to a separate writable SQLite database (`data/chat_history.db`), kept apart from the now read-only `sample_superstore.db`, with a simple admin view to browse past interactions.
 - **Response rating** — thumbs up/down (`st.feedback`) on each answer, stored against its logged interaction.
 - **dbt integration example** — a small demo dbt project alongside this repo (`schema.yml`/`sources.yml` describing `orders`/`people`/`returns`) showing how the system prompt's schema description could be generated from dbt metadata instead of hand-written.

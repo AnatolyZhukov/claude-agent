@@ -41,8 +41,10 @@ SYSTEM_PROMPT = (
     "You are an analyst assistant for the sample_superstore database. "
     "You must ALWAYS use one of the available tools to answer any question "
     "about metrics (sales, profit, orders, customers, regions, etc.) — "
-    "prefer get_revenue and get_active_users when they fit, and fall back to "
-    "query_database (raw SQL) for anything else. Never answer from assumption "
+    "prefer get_revenue and get_active_users when they fit, get_chart_data "
+    "when the user wants a chart/plot/visualization or a breakdown over time "
+    "or by category/region, and fall back to query_database (raw SQL) for "
+    "anything else. Never answer from assumption "
     "or refuse before calling a tool — the tool result is authoritative, even "
     "if it contradicts what you'd expect. "
     "Never guess or invent numbers — only report what a tool returns. "
@@ -85,6 +87,33 @@ tools = [
                 "category": {"type": "string", "description": "Optional exact category name to filter by"},
             },
             "required": ["start_date", "end_date"],
+        },
+    },
+    {
+        "name": "get_chart_data",
+        "description": "Get a metric broken down by a dimension (e.g. revenue by month, profit by "
+                        "category), suitable for rendering as a chart. Use this whenever the user "
+                        "asks to see/plot/chart/visualize a trend or a breakdown, instead of a "
+                        "single number.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "enum": ["revenue", "profit", "orders"],
+                    "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id).",
+                },
+                "group_by": {
+                    "type": "string",
+                    "enum": ["month", "region", "category", "sub_category"],
+                    "description": "Dimension to break the metric down by.",
+                },
+                "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+                "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+                "region": {"type": "string", "description": "Optional exact region name to filter by"},
+                "category": {"type": "string", "description": "Optional exact category name to filter by"},
+            },
+            "required": ["metric", "group_by", "start_date", "end_date"],
         },
     },
     {
@@ -163,6 +192,58 @@ def get_revenue(start_date: str, end_date: str, region: str = None, category: st
     return f"Total revenue: {total or 0:.2f}"
 
 
+METRIC_SQL = {
+    "revenue": "SUM(sales)",
+    "profit": "SUM(profit)",
+    "orders": "COUNT(DISTINCT order_id)",
+}
+GROUP_BY_SQL = {
+    "month": "strftime('%Y-%m', order_date)",
+    "region": "region",
+    "category": "category",
+    "sub_category": "sub_category",
+}
+
+
+def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
+                    region: str = None, category: str = None) -> tuple[str, dict]:
+    # KeyError on an invalid metric/group_by turns into "Error: ..." via the
+    # try/except around run_tool() in ask() — the input_schema enum should
+    # keep the model from sending anything else, but this is the real guard.
+    metric_expr = METRIC_SQL[metric]
+    group_expr = GROUP_BY_SQL[group_by]
+
+    sql = (f"SELECT {group_expr} AS label, {metric_expr} AS value FROM orders "
+           f"WHERE date(order_date) BETWEEN :start AND :end")
+    params = {"start": start_date, "end": end_date}
+    if region:
+        sql += " AND region = :region"
+        params["region"] = region
+    if category:
+        sql += " AND category = :category"
+        params["category"] = category
+    sql += f" GROUP BY {group_expr} ORDER BY {group_expr}"
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), params).fetchall()
+
+    data = {label: value for label, value in rows}
+
+    title = f"{metric} by {group_by}"
+    if region:
+        title += f" ({region})"
+    if category:
+        title += f" ({category})"
+    chart = {
+        "title": title,
+        "chart_type": "line" if group_by == "month" else "bar",
+        "data": data,
+    }
+
+    summary = "\n".join(f"{label}: {value}" for label, value in data.items())
+    return (summary or "No data."), chart
+
+
 def get_active_users(start_date: str, end_date: str) -> str:
     sql = (
         "SELECT COUNT(DISTINCT customer_id) FROM orders "
@@ -186,10 +267,19 @@ def run_tool(name, tool_input):
         )
     if name == "get_active_users":
         return get_active_users(tool_input["start_date"], tool_input["end_date"])
+    if name == "get_chart_data":
+        return get_chart_data(
+            tool_input["metric"],
+            tool_input["group_by"],
+            tool_input["start_date"],
+            tool_input["end_date"],
+            tool_input.get("region"),
+            tool_input.get("category"),
+        )
     raise ValueError(f"Unknown tool: {name}")
 
 
-def ask(question: str, history: list = None) -> str:
+def ask(question: str, history: list = None) -> tuple[str, list]:
     messages = list(history) if history else []
     messages.append({"role": "user", "content": question})
 
@@ -210,6 +300,8 @@ def ask(question: str, history: list = None) -> str:
     else:
         create = client.messages.create
 
+    charts = []
+
     while True:
         response = create(**create_kwargs)
 
@@ -221,6 +313,11 @@ def ask(question: str, history: list = None) -> str:
                         result = run_tool(block.name, block.input)
                     except Exception as e:
                         result = f"Error: {e}"
+                    # get_chart_data returns (text_for_model, chart_dict); every
+                    # other tool returns a plain string.
+                    if isinstance(result, tuple):
+                        result, chart = result
+                        charts.append(chart)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -230,4 +327,5 @@ def ask(question: str, history: list = None) -> str:
             messages.append({"role": "user", "content": tool_results})
             continue
 
-        return "\n".join(block.text for block in response.content if block.type == "text")
+        answer = "\n".join(block.text for block in response.content if block.type == "text")
+        return answer, charts
