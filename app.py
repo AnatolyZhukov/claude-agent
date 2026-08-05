@@ -69,6 +69,10 @@ def _cohort_table_html(chart):
 
 
 st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
+st.markdown(
+    "<h1 style='text-align:center'>Sample Superstore Analyst</h1>",
+    unsafe_allow_html=True,
+)
 
 main_col, info_col = st.columns([3, 1], gap="large")
 
@@ -94,8 +98,6 @@ with info_col:
         )
 
 with main_col:
-    st.title("Sample Superstore Analyst")
-
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
