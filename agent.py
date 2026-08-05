@@ -11,7 +11,12 @@ load_dotenv()
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 DB_PATH = Path(__file__).parent / "data" / "sample_superstore.db"
-engine = create_engine(f"sqlite:///{DB_PATH}")
+# Read-only at the SQLite level (not just via run_select's regex check below):
+# any write attempt (UPDATE/DELETE/INSERT, or less obvious things like ATTACH
+# DATABASE / PRAGMA writable_schema) fails with "attempt to write a readonly
+# database" regardless of how the SQL text looks. Requires the sqlite3 URI
+# connection mode, hence uri=true on the SQLAlchemy URL.
+engine = create_engine(f"sqlite:///file:{DB_PATH}?mode=ro&uri=true")
 
 DB_SCHEMA = """\
 orders(row_id, order_id, order_date, ship_date, ship_mode, customer_id, customer_name,
