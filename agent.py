@@ -474,6 +474,7 @@ def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
     create_kwargs = dict(
         model="claude-haiku-4-5-20251001",
         max_tokens=4096,
+        temperature=0.2,
         system=SYSTEM_PROMPT,
         tools=tools,
         messages=messages,
