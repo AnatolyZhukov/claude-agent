@@ -4,7 +4,7 @@ from agent import ask
 def main():
     question = input("Question: ")
     try:
-        answer, charts = ask(question)
+        answer, charts, _ = ask(question)
     except Exception as e:
         print(f"Error: {e}")
         return

@@ -468,7 +468,7 @@ def _has_unsafe_code_execution(content_blocks) -> bool:
     return False
 
 
-def ask(question: str, history: list = None) -> tuple[str, list]:
+def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
     messages = list(history) if history else []
     messages.append({"role": "user", "content": question})
 
@@ -519,11 +519,12 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
     content_turns = []
 
     def finish(answer):
+        interaction_id = None
         try:
-            log_interaction(question, answer, content_turns)
+            interaction_id = log_interaction(question, answer, content_turns)
         except Exception:
             pass
-        return answer, charts
+        return answer, charts, interaction_id
 
     for _ in range(MAX_TURNS):
         try:

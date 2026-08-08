@@ -21,7 +21,7 @@ if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
 
 from agent import ask
 from components import inject_css, render_history, render_info_panel, render_message, render_title
-from history import get_recent_history
+from history import get_recent_history, log_rating
 
 st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
 inject_css()
@@ -31,6 +31,19 @@ render_title("Sample Superstore Analyst")
 # on every single rerun (Streamlit reruns the whole script on every
 # interaction) — a short TTL keeps it close to live.
 get_recent_history_cached = st.cache_data(ttl=30)(get_recent_history)
+
+
+def _handle_rating(interaction_id: str, widget_key: str):
+    # Runs only on an actual click (st.feedback's on_change), not on every
+    # script rerun — the widget's new value is already in session_state
+    # under widget_key by the time this fires. None (icon clicked again to
+    # deselect) is a legitimate "clear my rating" and gets logged as such.
+    value = st.session_state.get(widget_key)
+    rating = {0: "down", 1: "up"}.get(value)
+    try:
+        log_rating(interaction_id, rating)
+    except Exception:
+        pass
 
 main_col, info_col = st.columns([3, 1], gap="large")
 
@@ -45,7 +58,7 @@ with main_col:
             st.session_state.messages = []
 
         for message in st.session_state.messages:
-            render_message(message)
+            render_message(message, on_rate=_handle_rating)
 
         # A plain st.form instead of st.chat_input: chat_input always renders as
         # a bar fixed to the bottom of the viewport, which overlaps whatever
@@ -70,10 +83,12 @@ with main_col:
             st.session_state.messages.append({"role": "user", "content": question})
             with st.spinner("Thinking..."):
                 try:
-                    answer, charts = ask(question, history=chat_history)
+                    answer, charts, interaction_id = ask(question, history=chat_history)
                 except Exception as e:
-                    answer, charts = f"Error: {e}", []
-            st.session_state.messages.append({"role": "assistant", "content": answer, "charts": charts})
+                    answer, charts, interaction_id = f"Error: {e}", [], None
+            st.session_state.messages.append({
+                "role": "assistant", "content": answer, "charts": charts, "interaction_id": interaction_id,
+            })
             # Rerun so the message loop above (which now includes this exchange)
             # renders before the freshly-reset form, keeping the form pinned
             # after the last message instead of appearing above it.

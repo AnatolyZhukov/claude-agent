@@ -99,17 +99,25 @@ def render_chart(chart: dict):
             st.bar_chart(series)
 
 
-def render_message(message: dict):
+def render_message(message: dict, on_rate=None):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         for chart in message.get("charts", []):
             render_chart(chart)
+        interaction_id = message.get("interaction_id")
+        if message["role"] == "assistant" and interaction_id and on_rate:
+            widget_key = f"feedback_{interaction_id}"
+            st.feedback("thumbs", key=widget_key, on_change=on_rate, args=(interaction_id, widget_key))
+
+
+_RATING_ICONS = {"up": "👍", "down": "👎"}
 
 
 def render_history(rows: list[dict]):
     if not rows:
         st.write("No questions asked yet in this period.")
         return
-    df = pd.DataFrame(rows)[["timestamp", "question", "answer"]]
-    df.columns = ["Time (UTC)", "Question", "Answer"]
+    df = pd.DataFrame(rows)[["timestamp", "question", "answer", "rating"]]
+    df["rating"] = df["rating"].map(_RATING_ICONS).fillna("")
+    df.columns = ["Time (UTC)", "Question", "Answer", "Rating"]
     st.dataframe(df, use_container_width=True, hide_index=True)
