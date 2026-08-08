@@ -14,7 +14,6 @@ CAPABILITIES = [
 ]
 
 ROADMAP = [
-    "Thumbs up/down feedback on each answer",
     "Demo: dbt-style schema docs as the source of the DB schema description",
 ]
 
