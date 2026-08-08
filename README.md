@@ -6,7 +6,8 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 
 - `agent.py` — core logic: Anthropic client, system prompt, tool definitions, `run_tool()`, `ask()`.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
-- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, and the right-hand "what I can do" / "roadmap" panel content.
+- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the chat/rating widgets, the history table, and the right-hand "what I can do" / "roadmap" panel content.
+- `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
 - `static/style.css` — CSS for the Streamlit UI (table borders/padding, centered title).
 - `main.py` — thin CLI wrapper around `agent.py`, useful for a quick one-off question without starting Streamlit.
 - `data/sample_superstore.db` — SQLite database (tables: `orders`, `people`, `returns`), opened **read-only** by the agent.
@@ -29,6 +30,12 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
    ```
    ANTHROPIC_API_KEY = 'sk-ant-...'
    ```
+   Two more variables are optional — the app works fine without them, just without that piece of functionality:
+   - `SKILL_ID` — enables the `metric-aggregation-rules` Anthropic Skill (see `upload_skill.py`).
+   - `GOOGLE_APPLICATION_CREDENTIALS_JSON` — enables chat history logging and the "Request History" tab (see [Chat history & feedback](#chat-history--feedback)). Set it to the **content** of a GCP service account key, minified to one line:
+     ```
+     GOOGLE_APPLICATION_CREDENTIALS_JSON = '<single-line JSON from: python3 -c "import json; print(json.dumps(json.load(open(\"key.json\"))))">'
+     ```
 
 ## Running locally
 
@@ -68,14 +75,23 @@ Only needed if you have a newer export of the dataset.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 - When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself, instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
 
+## Chat history & feedback
+
+When `GOOGLE_APPLICATION_CREDENTIALS_JSON` is set, every call to `ask()` logs a row to BigQuery (`claude_agent.chat_history`): the question, the final answer, and the raw content of every model turn (text + tool calls, as JSON) for debugging what the model actually did. Each assistant reply in the Streamlit chat gets a 👍/👎 (`st.feedback`) that logs to a separate `claude_agent.ratings` table. The "Request History" tab shows the last 20 questions from the past 5 days, joined with their latest rating.
+
+Ratings live in their own append-only table rather than a `rating` column updated in place, and inserts go through BigQuery **load jobs** rather than streaming inserts or DML — a GCP project with no billing account runs BigQuery in "sandbox mode", which rejects streaming inserts, `INSERT`, and `UPDATE` outright, but still allows batch load jobs. If `GOOGLE_APPLICATION_CREDENTIALS_JSON` isn't set, both features silently no-op — the chat still works, there's just no history/rating.
+
 ## Deployment
 
-Deployed on **Streamlit Community Cloud**, with access restricted to a whitelist of emails via the app's built-in "Private app" sharing setting. Secrets (`ANTHROPIC_API_KEY`, `SKILL_ID`) are configured through the Community Cloud web UI (`st.secrets`), not committed to the repository.
+Deployed on **Streamlit Community Cloud**, with access restricted to a whitelist of emails via the app's built-in "Private app" sharing setting. Secrets (`ANTHROPIC_API_KEY`, `SKILL_ID`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`) are configured through the Community Cloud web UI (`st.secrets`), not committed to the repository.
+
+One gotcha worth knowing: Streamlit secrets are parsed as TOML, and TOML's `"""triple-quoted"""` strings process backslash escapes — so pasting the service account JSON into a triple-double-quoted value silently turns the `\n` inside `private_key` into a real newline, corrupting the JSON. Use a single-quoted (TOML *literal*) string instead, same minified one-line JSON as in `.env`:
+```
+GOOGLE_APPLICATION_CREDENTIALS_JSON = '<minified one-line JSON>'
+```
 
 ## Roadmap
 
 Planned next, not started yet:
 
-- **Chat history** — every question/answer logged to a separate writable SQLite database (`data/chat_history.db`), kept apart from the now read-only `sample_superstore.db`, with a simple admin view to browse past interactions.
-- **Response rating** — thumbs up/down (`st.feedback`) on each answer, stored against its logged interaction.
 - **dbt integration example** — a small demo dbt project alongside this repo (`schema.yml`/`sources.yml` describing `orders`/`people`/`returns`) showing how the system prompt's schema description could be generated from dbt metadata instead of hand-written.
