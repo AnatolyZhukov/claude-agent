@@ -6,6 +6,8 @@ from anthropic import Anthropic, APITimeoutError
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
+from history import log_interaction
+
 load_dotenv()
 
 client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -510,17 +512,32 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
     # questions in SYSTEM_PROMPT.
     MAX_TURNS = 8
 
+    # The raw content blocks of every message.create response seen along the
+    # way (text/tool_use/server_tool_use, one list per turn), logged to
+    # BigQuery alongside the final answer for debugging what the model
+    # actually did — separate from `charts`, which only tracks chart data.
+    content_turns = []
+
+    def finish(answer):
+        try:
+            log_interaction(question, answer, content_turns)
+        except Exception:
+            pass
+        return answer, charts
+
     for _ in range(MAX_TURNS):
         try:
             response = create(**create_kwargs)
         except APITimeoutError:
-            return (
+            return finish(
                 "This is taking too long to answer, likely because it led "
                 "me down a path with no real data to work with. Please "
                 "rephrase the question so it can be answered via a direct "
                 "database query (e.g. a specific metric, date range, or "
                 "breakdown)."
-            ), charts
+            )
+
+        content_turns.append([block.model_dump(mode="json") for block in response.content])
 
         if _has_unsafe_code_execution(response.content):
             if tool_summaries:
@@ -530,14 +547,14 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
                 # get_cohort_retention already succeeded) — that detour is
                 # blocked, but the data itself is genuine, so surface it
                 # instead of discarding a correct answer.
-                return "\n\n".join(tool_summaries), charts
-            return (
+                return finish("\n\n".join(tool_summaries))
+            return finish(
                 "I can't answer this — it led me to use a tool that has no "
                 "access to the real sample_superstore data, so I won't "
                 "report numbers I can't verify. Please rephrase the question "
                 "so it can be answered via a direct database query (e.g. a "
                 "specific metric, date range, or breakdown)."
-            ), charts
+            )
 
         if response.stop_reason == "tool_use":
             tool_results = []
@@ -564,7 +581,7 @@ def ask(question: str, history: list = None) -> tuple[str, list]:
             continue
 
         answer = "\n".join(block.text for block in response.content if block.type == "text")
-        return answer, charts
+        return finish(answer)
 
-    return (f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
-            "Please try rephrasing the question or breaking it into smaller parts."), charts
+    return finish(f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
+                  "Please try rephrasing the question or breaking it into smaller parts.")

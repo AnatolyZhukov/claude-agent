@@ -14,7 +14,6 @@ CAPABILITIES = [
 ]
 
 ROADMAP = [
-    "Log every question/answer to a history view",
     "Thumbs up/down feedback on each answer",
     "Demo: dbt-style schema docs as the source of the DB schema description",
 ]
@@ -105,3 +104,12 @@ def render_message(message: dict):
         st.markdown(message["content"])
         for chart in message.get("charts", []):
             render_chart(chart)
+
+
+def render_history(rows: list[dict]):
+    if not rows:
+        st.write("No questions asked yet in this period.")
+        return
+    df = pd.DataFrame(rows)[["timestamp", "question", "answer"]]
+    df.columns = ["Time (UTC)", "Question", "Answer"]
+    st.dataframe(df, use_container_width=True, hide_index=True)
