@@ -32,7 +32,7 @@ DB_SCHEMA = build_db_schema() + "\n" + (
     "date(order_date) and compare against plain 'YYYY-MM-DD' strings, otherwise the last day\n"
     "of a range is silently excluded (a bare 'YYYY-MM-DD' string sorts before the timestamped\n"
     "value for that same day).\n"
-    "The data covers order dates from 2023-01-03 to 2026-12-30. This range is a fact about\n"
+    "The data covers order dates from 2023-01-03 to 2026-08-08. This range is a fact about\n"
     "this dataset, not a real-world constraint — do not refuse or claim data is unavailable\n"
     "for any year in or near this range based on assumptions about \"the future\"; always call\n"
     "a tool to check instead of guessing."

@@ -6,6 +6,7 @@ Defaults to the bundled scripts/sample_superstore.xls if no path is given.
 """
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -33,9 +34,31 @@ def main():
     engine = create_engine(f"sqlite:///{DB_PATH}")
 
     xls = pd.ExcelFile(source_path)
+    # The source .xls has orders dated past "today" (whatever today is when
+    # this runs) — fine for the original Tableau demo dataset, but looks like
+    # uncleaned data for a portfolio project. Dropped here, not just in the
+    # already-built data/sample_superstore.db, so re-running this script
+    # later (e.g. against a newer export) doesn't reintroduce the same
+    # future-dated rows. retained_order_ids feeds the matching cleanup below
+    # for returns, which reference orders by order_id — relies on "Orders"
+    # coming before "Returns" in SHEET_TO_TABLE's (insertion) order.
+    retained_order_ids = None
     for sheet_name, table_name in SHEET_TO_TABLE.items():
         df = xls.parse(sheet_name)
         df.columns = [to_snake_case(c) for c in df.columns]
+
+        if table_name == "orders":
+            before = len(df)
+            df = df[df["order_date"].dt.date <= date.today()]
+            retained_order_ids = set(df["order_id"])
+            if before != len(df):
+                print(f"Dropped {before - len(df)} orders with order_date after {date.today()}")
+        elif table_name == "returns":
+            before = len(df)
+            df = df[df["order_id"].isin(retained_order_ids)]
+            if before != len(df):
+                print(f"Dropped {before - len(df)} returns referencing removed orders")
+
         df.to_sql(table_name, engine, if_exists="replace", index=False)
         print(f"{sheet_name} -> table '{table_name}' ({len(df)} rows)")
 
