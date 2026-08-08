@@ -94,4 +94,3 @@ One gotcha worth knowing: Streamlit secrets are parsed as TOML, and TOML's `"""t
 ```
 GOOGLE_APPLICATION_CREDENTIALS_JSON = '<minified one-line JSON>'
 ```
-ст
