@@ -2,5 +2,6 @@ anthropic==0.120.2
 google-cloud-bigquery==3.43.0
 pandas==3.0.5
 python-dotenv==1.2.2
+PyYAML==6.0.3
 SQLAlchemy==2.0.51
 streamlit==1.60.0

@@ -1,0 +1,12 @@
+name: 'claude_agent_demo'
+version: '1.0.0'
+config-version: 2
+
+profile: 'claude_agent_demo'
+
+model-paths: ["models"]
+
+models:
+  claude_agent_demo:
+    staging:
+      +materialized: view

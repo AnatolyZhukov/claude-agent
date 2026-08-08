@@ -6,6 +6,7 @@ from anthropic import Anthropic, APITimeoutError
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
+from dbt_schema import build_db_schema
 from history import log_interaction
 
 load_dotenv()
@@ -20,24 +21,22 @@ DB_PATH = Path(__file__).parent / "data" / "sample_superstore.db"
 # connection mode, hence uri=true on the SQLAlchemy URL.
 engine = create_engine(f"sqlite:///file:{DB_PATH}?mode=ro&uri=true")
 
-DB_SCHEMA = """\
-orders(row_id, order_id, order_date, ship_date, ship_mode, customer_id, customer_name,
-       segment, country_region, city, state_province, postal_code, region,
-       product_id, category, sub_category, product_name, sales, quantity, discount, profit)
-people(regional_manager, region)
-returns(order_id, returned)
-
-region values: Central, East, South, West
-category values: Office Supplies, Furniture, Technology
-order_date/ship_date are stored as full timestamps, e.g. '2025-12-31 00:00:00.000000' —
-when writing raw SQL with BETWEEN/comparisons on these columns, always wrap them in
-date(order_date) and compare against plain 'YYYY-MM-DD' strings, otherwise the last day
-of a range is silently excluded (a bare 'YYYY-MM-DD' string sorts before the timestamped
-value for that same day).
-The data covers order dates from 2023-01-03 to 2026-12-30. This range is a fact about
-this dataset, not a real-world constraint — do not refuse or claim data is unavailable
-for any year in or near this range based on assumptions about "the future"; always call
-a tool to check instead of guessing."""
+# The table/column/accepted-values portion is generated from dbt_demo's
+# sources.yml (see dbt_schema.py and dbt_demo/README.md) instead of being
+# hand-written here — a demo of moving that source of truth from code into
+# dbt metadata. The rest is prompt-engineering (date-format gotcha, dataset
+# date range), not schema documentation, so it stays hardcoded.
+DB_SCHEMA = build_db_schema() + "\n" + (
+    "order_date/ship_date are stored as full timestamps, e.g. '2025-12-31 00:00:00.000000' —\n"
+    "when writing raw SQL with BETWEEN/comparisons on these columns, always wrap them in\n"
+    "date(order_date) and compare against plain 'YYYY-MM-DD' strings, otherwise the last day\n"
+    "of a range is silently excluded (a bare 'YYYY-MM-DD' string sorts before the timestamped\n"
+    "value for that same day).\n"
+    "The data covers order dates from 2023-01-03 to 2026-12-30. This range is a fact about\n"
+    "this dataset, not a real-world constraint — do not refuse or claim data is unavailable\n"
+    "for any year in or near this range based on assumptions about \"the future\"; always call\n"
+    "a tool to check instead of guessing."
+)
 
 SYSTEM_PROMPT = (
     "You are an analyst assistant for the sample_superstore database. "

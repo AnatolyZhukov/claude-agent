@@ -13,9 +13,7 @@ CAPABILITIES = [
     "Ad-hoc read-only SQL for anything else",
 ]
 
-ROADMAP = [
-    "Demo: dbt-style schema docs as the source of the DB schema description",
-]
+ROADMAP = []
 
 
 def inject_css():
@@ -31,9 +29,10 @@ def render_info_panel():
     with st.container(border=True):
         st.markdown("**What I can do**")
         st.markdown("\n".join(f"- {item}" for item in CAPABILITIES))
-    with st.container(border=True):
-        st.markdown("**Roadmap**")
-        st.markdown("\n".join(f"- {item}" for item in ROADMAP))
+    if ROADMAP:
+        with st.container(border=True):
+            st.markdown("**Roadmap**")
+            st.markdown("\n".join(f"- {item}" for item in ROADMAP))
 
 
 def _blue_shade(value: float, vmin: float, vmax: float) -> str:

@@ -1,0 +1,83 @@
+version: 2
+
+sources:
+  - name: sample_superstore
+    description: >
+      Classic Tableau Sample Superstore dataset — retail orders, returns, and
+      regional managers, loaded into SQLite via scripts/build_db.py.
+    tables:
+      - name: orders
+        description: One row per order line item (product-level detail within an order).
+        columns:
+          - name: row_id
+            description: Row-level surrogate key.
+          - name: order_id
+            description: Order identifier; multiple rows (line items) can share the same order_id.
+          - name: order_date
+            description: >
+              Date the order was placed. Stored as a full timestamp (e.g.
+              '2025-12-31 00:00:00.000000') even though time-of-day is
+              always midnight.
+          - name: ship_date
+            description: Date the order shipped, stored the same way as order_date.
+          - name: ship_mode
+            description: Shipping method (e.g. Standard Class, Second Class).
+          - name: customer_id
+            description: Customer identifier.
+          - name: customer_name
+            description: Customer's display name.
+          - name: segment
+            description: Customer segment (e.g. Consumer, Corporate, Home Office).
+          - name: country_region
+            description: Country the order shipped to.
+          - name: city
+            description: City the order shipped to.
+          - name: state_province
+            description: State/province the order shipped to.
+          - name: postal_code
+            description: Postal code the order shipped to.
+          - name: region
+            description: Sales region.
+            tests:
+              - accepted_values:
+                  values: ['Central', 'East', 'South', 'West']
+          - name: product_id
+            description: Product identifier.
+          - name: category
+            description: Top-level product category.
+            tests:
+              - accepted_values:
+                  values: ['Office Supplies', 'Furniture', 'Technology']
+          - name: sub_category
+            description: Product sub-category (e.g. Chairs, Binders, Phones).
+          - name: product_name
+            description: Product display name.
+          - name: sales
+            description: Line-item revenue. Additive — safe to SUM across any grouping.
+          - name: quantity
+            description: Units ordered for this line item.
+          - name: discount
+            description: Discount applied to this line item, as a fraction (e.g. 0.2 = 20%).
+          - name: profit
+            description: Line-item profit. Additive — safe to SUM across any grouping.
+
+      - name: people
+        description: Regional manager lookup — one row per region.
+        columns:
+          - name: regional_manager
+            description: Name of the manager responsible for the region.
+          - name: region
+            description: Sales region this manager is responsible for.
+            tests:
+              - accepted_values:
+                  values: ['Central', 'East', 'South', 'West']
+
+      - name: returns
+        description: >
+          Orders that were returned. A row's presence means that order_id was
+          returned; there is no "not returned" row for orders that weren't.
+        columns:
+          - name: order_id
+            description: Order identifier that was returned (matches orders.order_id).
+          - name: returned
+            description: Literal string "Yes" for every row — this table only lists returned orders.
