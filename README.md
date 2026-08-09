@@ -4,7 +4,9 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 
 ## Project structure
 
-- `agent.py` — core logic: Anthropic client, system prompt, tool definitions, `run_tool()`, `ask()`.
+- `agent.py` — orchestration: the (lazily built) Anthropic client, the system prompt, and `ask()`, which drives the tool-use loop and returns an `AskResult`.
+- `tools.py` — database access layer and tool implementations: the lazily built read-only SQLite engine, the metric functions, the JSON tool schemas, and `run_tool()` (which returns a uniform `ToolResult`).
+- `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
 - `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the chat/rating widgets, the history table, and the right-hand "what I can do" / "roadmap" panel content.
 - `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
@@ -72,10 +74,10 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has five tools: `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
+- The agent has five tools (defined in `tools.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
-- When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself, instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
+- When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself (the vetting logic lives in `code_execution_guard.py`), instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
 
 ## Chat history & feedback
 
