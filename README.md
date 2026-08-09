@@ -5,13 +5,13 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 ## Project structure
 
 - `agent.py` — orchestration: the (lazily built) Anthropic client, the system prompt, and `ask()`, which drives the tool-use loop and returns an `AskResult`.
-- `database/` — everything that touches the database, and the only place that opens a connection or builds SQL: `engine.py` (the lazily built **read-only** SQLite engine and the row limit for raw queries) and `queries.py` (the SQL behind each tool; every function returns a `ToolResult`).
+- `database/` — everything that touches the database, and the only place that opens a connection or builds SQL: `engine.py` (the lazily built **read-only** SQLite engine and the row limit for raw queries) and `queries.py` (the SQL behind each tool; every function returns a `ToolResult`). Its `__init__.py` deliberately re-exports nothing — import each name from the module that defines it, so there's only ever one import path for it.
 - `tools.py` — tool dispatch: maps a tool call to its implementation and turns expected failures into an error `ToolResult`.
 - `tool_schemas.json` — the tool schemas advertised to the API, kept as data rather than a literal in code.
 - `contracts.py` — `ToolResult` and the `ChartType` enum: the shapes shared between the tool layer and the UI.
 - `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
-- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the chat/rating widgets, the history table, and the right-hand "what I can do" / "roadmap" panel content.
+- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it — currently there isn't).
 - `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
 - `dbt_schema.py` + `dbt_demo/` — generates the system prompt's schema section from a dbt-style `sources.yml` instead of a hand-written string. See [dbt-as-schema-documentation demo](#dbt-as-schema-documentation-demo) below.
 - `static/style.css` — CSS for the Streamlit UI (table borders/padding, centered title).
@@ -23,6 +23,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 - `tests/` — offline unit tests (pytest); see [Tests & linting](#tests--linting) below.
 - `eval/` — manually-run regression suite against the real agent (`run_eval.py` + `dataset.json`); see [Evaluation](#evaluation) below.
 - `pyproject.toml` — configuration for pytest, ruff, and mypy (the project isn't packaged).
+- `requirements.txt` — what the deployed app needs at runtime. `requirements-dev.txt` covers the local-only tooling: `xlrd` (with `pandas`, which is a runtime dependency too) for rebuilding the database, and `pytest`/`ruff`/`mypy` for the checks below.
 
 ## Setup
 
@@ -54,7 +55,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 streamlit run app.py
 ```
 
-Opens at `http://localhost:8501`. Ask things like "What was total profit in the West region in 2024?", "Which sub-category is the most profitable?", or "Show monthly cohort retention for all time". The right-hand panel lists current capabilities and the roadmap.
+Opens at `http://localhost:8501`. Ask things like "What was total profit in the West region in 2024?", "Which sub-category is the most profitable?", or "Show monthly cohort retention for all time". The right-hand panel lists what the agent can do.
 
 ### CLI (quick single-question test, no browser)
 
