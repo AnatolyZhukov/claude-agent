@@ -4,3 +4,4 @@ venv/
 .claude/skills/
 CLAUDE.md
 __pycache__/
+eval/results/
