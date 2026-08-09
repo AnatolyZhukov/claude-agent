@@ -12,6 +12,7 @@ SKILL_DIR = Path(__file__).parent / "skills" / "metric-aggregation-rules"
 
 
 def main():
+    """Uploads the skill directory and prints the resulting SKILL_ID."""
     files = [
         (str(p.relative_to(SKILL_DIR.parent)), open(p, "rb"))
         for p in sorted(SKILL_DIR.rglob("*"))

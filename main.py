@@ -4,6 +4,7 @@ from agent import ask
 
 
 def main():
+    """Asks one question from stdin and prints the answer and any charts."""
     question = input("Question: ")
     try:
         result = ask(question)

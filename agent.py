@@ -1,23 +1,25 @@
 """Agent orchestration: builds the request to Claude and drives the tool-use
 loop in `ask()`.
 
-The database access layer and tool implementations live in tools.py; the
-code_execution safety policy lives in code_execution_guard.py. This module is
-responsible for the prompt, the (lazily built) API client, and the loop.
+The tool implementations live in queries.py behind the dispatcher in tools.py;
+the code_execution safety policy lives in code_execution_guard.py. This module
+owns the prompt, the (lazily built) API client, and the loop.
 """
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import lru_cache
-from typing import Optional
+from functools import cache
+from typing import Any
 
 from anthropic import Anthropic, APITimeoutError
 from dotenv import load_dotenv
 
 from code_execution_guard import has_unsafe_code_execution
+from contracts import ToolResult
 from dbt_schema import build_db_schema
 from history import log_interaction
-from tools import TOOL_SCHEMAS, run_tool
+from tools import load_tool_schemas, run_tool
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +42,27 @@ REQUEST_TIMEOUT = 60.0
 # code_execution for data questions in SYSTEM_PROMPT.
 MAX_TURNS = 8
 
+# User-facing copy for the loop's non-answer exits. Kept out of the function
+# body so ask() reads as control flow rather than prose.
+TIMEOUT_MESSAGE = (
+    "This is taking too long to answer, likely because it led me down a path "
+    "with no real data to work with. Please rephrase the question so it can be "
+    "answered via a direct database query (e.g. a specific metric, date range, "
+    "or breakdown)."
+)
+UNSAFE_CODE_EXECUTION_MESSAGE = (
+    "I can't answer this — it led me to use a tool that has no access to the "
+    "real sample_superstore data, so I won't report numbers I can't verify. "
+    "Please rephrase the question so it can be answered via a direct database "
+    "query (e.g. a specific metric, date range, or breakdown)."
+)
+MAX_TURNS_MESSAGE = (
+    f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
+    "Please try rephrasing the question or breaking it into smaller parts."
+)
 
-@lru_cache(maxsize=1)
+
+@cache
 def get_client() -> Anthropic:
     """Returns the process-wide Anthropic client, created on first use.
 
@@ -107,10 +128,9 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_skills() -> list:
-    """The Skills attached through the request container, or [] if no
-    SKILL_ID is configured. Skills attach through container.skills, not
-    through `tools`.
+def build_skills() -> list[dict]:
+    """The Skills attached through the request container, or [] if no SKILL_ID
+    is configured. Skills attach through container.skills, not through `tools`.
     """
     skill_id = os.getenv("SKILL_ID")
     if not skill_id:
@@ -118,7 +138,7 @@ def build_skills() -> list:
     return [{"type": "custom", "skill_id": skill_id, "version": "latest"}]
 
 
-def build_tools() -> list:
+def build_tools(skills: list[dict]) -> list[dict]:
     """The tool list sent to the model: the DB tool schemas, plus the
     code_execution tool whenever any Skill is attached.
 
@@ -126,11 +146,11 @@ def build_tools() -> list:
     container.skills is used at all — even for a Skill that's pure text and
     never runs code ("container: skills can only be used when a code execution
     tool is enabled"). So it's mandatory whenever a skill is set, not just for
-    skills that actually execute scripts. Returns a fresh list so the module
-    constant TOOL_SCHEMAS is never mutated.
+    skills that actually execute scripts. Takes `skills` as an argument rather
+    than reading the environment again, so one ask() resolves it exactly once.
     """
-    tools = list(TOOL_SCHEMAS)
-    if build_skills():
+    tools = list(load_tool_schemas())
+    if skills:
         tools.append({"type": "code_execution_20250825", "name": "code_execution"})
     return tools
 
@@ -144,74 +164,95 @@ class ToolCallTrace:
     result: str
     is_error: bool
 
+    @classmethod
+    def of(cls, name: str, tool_input: dict, result: ToolResult) -> "ToolCallTrace":
+        """Records a call and the ToolResult it produced."""
+        return cls(tool=name, input=tool_input, result=result.content,
+                   is_error=result.is_error)
+
+
+@dataclass
+class ToolCallBatch:
+    """Everything produced by executing one response's tool_use blocks.
+
+    Returned rather than accumulated into caller-owned lists, so the executor
+    has no side effects on its arguments.
+    """
+
+    tool_results: list[dict] = field(default_factory=list)
+    charts: list[dict] = field(default_factory=list)
+    # Text of successful calls only — used to salvage real data if the model
+    # later detours into a blocked code_execution call.
+    summaries: list[str] = field(default_factory=list)
+    trace: list[ToolCallTrace] = field(default_factory=list)
+
 
 @dataclass
 class AskResult:
     """Everything one ask() call produces.
 
-    Always the same shape (no flag argument toggling the return type):
-    `charts` and `trace` are simply empty when nothing populated them.
-    `interaction_id` is the logged history row id, or None if logging is off
-    or BigQuery isn't configured.
+    Always the same shape (no flag argument toggling the return type): `charts`
+    and `trace` are simply empty when nothing populated them. `interaction_id`
+    is the logged history row id, or None if logging is off or BigQuery isn't
+    configured.
     """
 
     answer: str
-    charts: list = field(default_factory=list)
-    interaction_id: Optional[str] = None
-    trace: list = field(default_factory=list)
+    charts: list[dict] = field(default_factory=list)
+    interaction_id: str | None = None
+    trace: list[ToolCallTrace] = field(default_factory=list)
 
 
-def _run_tool_calls(response, charts: list, tool_summaries: list,
-                    trace: list) -> list:
-    """Executes every tool_use block in `response`, accumulating charts, plain
-    text summaries, and trace entries as side effects, and returns the
-    tool_result blocks to send back to the model.
+def execute_tool_calls(response: Any) -> ToolCallBatch:
+    """Runs every tool_use block in `response` and collects the outcomes.
+
+    `response` is an SDK Message (or BetaMessage — the two are structurally
+    identical for the blocks read here).
     """
-    tool_results = []
+    batch = ToolCallBatch()
     for block in response.content:
         if block.type != "tool_use":
             continue
         result = run_tool(block.name, block.input)
         if result.chart is not None:
-            charts.append(result.chart)
+            batch.charts.append(result.chart)
         if not result.is_error:
-            tool_summaries.append(result.content)
-        trace.append(ToolCallTrace(
-            tool=block.name, input=block.input,
-            result=result.content, is_error=result.is_error,
-        ))
-        tool_results.append({
+            batch.summaries.append(result.content)
+        batch.trace.append(ToolCallTrace.of(block.name, block.input, result))
+        batch.tool_results.append({
             "type": "tool_result",
             "tool_use_id": block.id,
             "content": result.content,
         })
-    return tool_results
+    return batch
 
 
-def ask(question: str, history: Optional[list] = None,
+def ask(question: str, history: list[dict] | None = None,
         log_history: bool = True) -> AskResult:
     """Answers `question`, driving the tool-use loop, and returns an
     `AskResult`.
 
     `history` is an optional list of prior {"role", "content"} messages (no raw
-    tool_use/tool_result blocks) giving the chat memory between questions.
-    Set `log_history=False` to skip writing the interaction to BigQuery (used
-    by the eval harness).
+    tool_use/tool_result blocks) giving the chat memory between questions. Set
+    `log_history=False` to skip writing the interaction to BigQuery (used by
+    the eval harness).
     """
-    messages = list(history) if history else []
+    messages: list[dict] = list(history) if history else []
     messages.append({"role": "user", "content": question})
 
-    create_kwargs = dict(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        temperature=TEMPERATURE,
-        system=SYSTEM_PROMPT,
-        tools=build_tools(),
-        messages=messages,
-        timeout=REQUEST_TIMEOUT,
-    )
-
     skills = build_skills()
+    create_kwargs: dict[str, Any] = {
+        "model": MODEL,
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
+        "system": SYSTEM_PROMPT,
+        "tools": build_tools(skills),
+        "messages": messages,
+        "timeout": REQUEST_TIMEOUT,
+    }
+    # Either SDK entry point; they take the same kwargs for this call, and the
+    # beta one additionally accepts betas/container.
+    create: Callable[..., Any]
     if skills:
         create = get_client().beta.messages.create
         # code-execution beta is required alongside skills-2025-10-02 — see
@@ -221,68 +262,59 @@ def ask(question: str, history: Optional[list] = None,
     else:
         create = get_client().messages.create
 
-    charts: list = []
+    charts: list[dict] = []
     # Plain-text results from successful, real tool calls made so far — kept so
     # that if the model later detours into an unsafe code_execution call (e.g.
     # trying to plot/export an image after a chart tool already succeeded), we
     # can still hand back the real data already fetched instead of a blanket
     # refusal that would hide a correct answer.
-    tool_summaries: list = []
-    trace: list = []
+    tool_summaries: list[str] = []
+    trace: list[ToolCallTrace] = []
     # The raw content blocks of every response, logged to BigQuery alongside
     # the final answer for debugging what the model actually did.
-    content_turns: list = []
+    content_turns: list[list[dict]] = []
 
     def finish(answer: str) -> AskResult:
+        """Logs the interaction and packages everything collected so far.
+
+        Every exit from the loop below goes through here, so history logging
+        can't be forgotten on one of the non-answer paths.
+        """
         interaction_id = None
         if log_history:
             try:
                 interaction_id = log_interaction(question, answer, content_turns)
             except Exception:
                 logger.warning("Failed to log interaction to BigQuery", exc_info=True)
-        return AskResult(
-            answer=answer, charts=charts, interaction_id=interaction_id,
-            trace=[t.__dict__ for t in trace],
-        )
+        return AskResult(answer=answer, charts=charts,
+                         interaction_id=interaction_id, trace=trace)
 
     for _ in range(MAX_TURNS):
         try:
             response = create(**create_kwargs)
         except APITimeoutError:
-            return finish(
-                "This is taking too long to answer, likely because it led "
-                "me down a path with no real data to work with. Please "
-                "rephrase the question so it can be answered via a direct "
-                "database query (e.g. a specific metric, date range, or "
-                "breakdown)."
-            )
+            return finish(TIMEOUT_MESSAGE)
 
         content_turns.append([block.model_dump(mode="json") for block in response.content])
 
         if has_unsafe_code_execution(response.content):
-            if tool_summaries:
-                # Real data was already fetched via a real tool before the
-                # model detoured into code_execution (typically trying to also
-                # plot/export an image after a chart tool already succeeded) —
-                # that detour is blocked, but the data itself is genuine, so
-                # surface it instead of discarding a correct answer.
-                return finish("\n\n".join(tool_summaries))
-            return finish(
-                "I can't answer this — it led me to use a tool that has no "
-                "access to the real sample_superstore data, so I won't "
-                "report numbers I can't verify. Please rephrase the question "
-                "so it can be answered via a direct database query (e.g. a "
-                "specific metric, date range, or breakdown)."
-            )
+            # Real data may already have been fetched via a real tool before
+            # the model detoured into code_execution (typically trying to also
+            # plot/export an image after a chart tool succeeded) — that detour
+            # is blocked, but the data itself is genuine, so surface it instead
+            # of discarding a correct answer.
+            return finish("\n\n".join(tool_summaries) if tool_summaries
+                          else UNSAFE_CODE_EXECUTION_MESSAGE)
 
         if response.stop_reason == "tool_use":
-            tool_results = _run_tool_calls(response, charts, tool_summaries, trace)
+            batch = execute_tool_calls(response)
+            charts.extend(batch.charts)
+            tool_summaries.extend(batch.summaries)
+            trace.extend(batch.trace)
             messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
+            messages.append({"role": "user", "content": batch.tool_results})
             continue
 
-        answer = "\n".join(block.text for block in response.content if block.type == "text")
-        return finish(answer)
+        return finish("\n".join(b.text for b in response.content if b.type == "text"))
 
-    return finish(f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
-                  "Please try rephrasing the question or breaking it into smaller parts.")
+    return finish(MAX_TURNS_MESSAGE)

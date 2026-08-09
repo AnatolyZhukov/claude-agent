@@ -1,2 +1,6 @@
+# Local-only tooling: data prep (build_db.py) plus tests and linters.
 pandas==3.0.5
 xlrd==2.0.2
+pytest==9.1.1
+ruff==0.16.2
+mypy==2.3.0

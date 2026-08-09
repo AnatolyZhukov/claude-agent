@@ -10,6 +10,14 @@ from history import get_recent_history, log_rating
 
 logger = logging.getLogger(__name__)
 
+# Configured here, in the entry point: without it the warnings logged across
+# the app fall back to logging's lastResort handler (WARNING+, no timestamp,
+# no logger name), which is close to useless in the deployed container logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 load_dotenv()
 
 
@@ -38,14 +46,20 @@ render_title("Sample Superstore Analyst")
 # interaction) — a short TTL keeps it close to live.
 get_recent_history_cached = st.cache_data(ttl=30)(get_recent_history)
 
+# st.feedback("thumbs") reports the clicked icon's index.
+_THUMBS_TO_RATING = {0: "down", 1: "up"}
 
-def _handle_rating(interaction_id: str, widget_key: str):
-    # Runs only on an actual click (st.feedback's on_change), not on every
-    # script rerun — the widget's new value is already in session_state under
-    # widget_key by the time this fires. None (icon clicked again to deselect)
-    # is a legitimate "clear my rating" and gets logged as such.
+
+def _handle_rating(interaction_id: str, widget_key: str) -> None:
+    """Logs a thumbs click.
+
+    Runs only on an actual click (st.feedback's on_change), not on every script
+    rerun — the widget's new value is already in session_state under widget_key
+    by the time this fires. A non-int value (icon clicked again to deselect)
+    is a legitimate "clear my rating" and gets logged as such.
+    """
     value = st.session_state.get(widget_key)
-    rating = {0: "down", 1: "up"}.get(value)
+    rating = _THUMBS_TO_RATING.get(value) if isinstance(value, int) else None
     try:
         log_rating(interaction_id, rating)
     except Exception:
@@ -91,13 +105,17 @@ with main_col:
             with st.spinner("Thinking..."):
                 try:
                     result = ask(question, history=chat_history)
-                    answer, charts, interaction_id = result.answer, result.charts, result.interaction_id
+                    reply = {
+                        "role": "assistant", "content": result.answer,
+                        "charts": result.charts, "interaction_id": result.interaction_id,
+                    }
                 except Exception as e:
                     logger.warning("ask() failed", exc_info=True)
-                    answer, charts, interaction_id = f"Error: {e}", [], None
-            st.session_state.messages.append({
-                "role": "assistant", "content": answer, "charts": charts, "interaction_id": interaction_id,
-            })
+                    reply = {
+                        "role": "assistant", "content": f"Error: {e}",
+                        "charts": [], "interaction_id": None,
+                    }
+            st.session_state.messages.append(reply)
             # Rerun so the message loop above (which now includes this exchange)
             # renders before the freshly-reset form, keeping the form pinned
             # after the last message instead of appearing above it.

@@ -1,0 +1,26 @@
+# Tooling configuration only — this project isn't packaged/installed.
+
+[tool.pytest.ini_options]
+# rootdir is on sys.path so tests can import the top-level modules without an
+# installed package or a conftest shim.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+exclude = [".claude", "venv", "__pycache__"]
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import sorting, B: bugbear (mutable defaults,
+# broad surprises), UP: pyupgrade, C4: comprehensions.
+select = ["E", "F", "I", "B", "UP", "C4"]
+
+[tool.mypy]
+python_version = "3.13"
+# The third-party stack here (streamlit, anthropic, google-cloud-bigquery) is
+# largely untyped or stub-less; checking our own modules is the point.
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = "(^|/)(\\.claude|venv|scripts)/"
