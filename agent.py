@@ -475,7 +475,7 @@ def ask(question: str, history: list = None, log_history: bool = True,
     create_kwargs = dict(
         model="claude-haiku-4-5-20251001",
         max_tokens=4096,
-        temperature=0.2,
+        temperature=0.4,
         system=SYSTEM_PROMPT,
         tools=tools,
         messages=messages,
