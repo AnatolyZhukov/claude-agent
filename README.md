@@ -15,6 +15,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 - `scripts/build_db.py` + `scripts/sample_superstore.xls` — rebuilds the database from the original Excel export.
 - `skills/metric-aggregation-rules/SKILL.md` — an Anthropic Skill with rules for additive vs. non-additive metrics; used live via the API when `SKILL_ID` is set (see `upload_skill.py`).
 - `upload_skill.py` — one-off script that uploads `skills/metric-aggregation-rules/` as an Anthropic Skill and prints the `SKILL_ID` to put in `.env`.
+- `eval/` — manually-run regression suite against the real agent (`run_eval.py` + `dataset.json`); see [Evaluation](#evaluation) below.
 
 ## Setup
 
@@ -71,7 +72,7 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has five tools: `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for monthly/quarterly cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
+- The agent has five tools: `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 - When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself, instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
@@ -81,6 +82,14 @@ Only needed if you have a newer export of the dataset.
 When `GOOGLE_APPLICATION_CREDENTIALS_JSON` is set, every call to `ask()` logs a row to BigQuery (`claude_agent.chat_history`): the question, the final answer, and the raw content of every model turn (text + tool calls, as JSON) for debugging what the model actually did. Each assistant reply in the Streamlit chat gets a 👍/👎 (`st.feedback`) that logs to a separate `claude_agent.ratings` table. The "Request History" tab shows the last 20 questions from the past 5 days, joined with their latest rating.
 
 Ratings live in their own append-only table rather than a `rating` column updated in place, and inserts go through BigQuery **load jobs** rather than streaming inserts or DML — a GCP project with no billing account runs BigQuery in "sandbox mode", which rejects streaming inserts, `INSERT`, and `UPDATE` outright, but still allows batch load jobs. If `GOOGLE_APPLICATION_CREDENTIALS_JSON` isn't set, both features silently no-op — the chat still works, there's just no history/rating.
+
+## Evaluation
+
+```
+python eval/run_eval.py
+```
+
+Runs a fixed set of question/expected-answer pairs through the real agent (real Anthropic API calls) and grades each one in code against the actual tool call and result — no LLM judge. Not wired into CI; run it by hand after changing `SYSTEM_PROMPT`, a tool, or the model, to check nothing regressed before deploying. See `eval/README.md` for the dataset format, grading types, and how to read the pass/fail summary (including the `"known-issue"` cases that are expected to fail).
 
 ## dbt-as-schema-documentation demo
 

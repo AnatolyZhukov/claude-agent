@@ -44,8 +44,9 @@ SYSTEM_PROMPT = (
     "about metrics (sales, profit, orders, customers, regions, etc.) — "
     "prefer get_revenue and get_active_users when they fit, get_chart_data "
     "when the user wants a chart/plot/visualization or a breakdown over time "
-    "or by category/region, get_cohort_retention when the user wants monthly "
-    "or quarterly cohort/retention analysis (pass granularity), and fall "
+    "or by category/region, get_cohort_retention when the user wants daily, "
+    "weekly, monthly, quarterly, or yearly cohort/retention analysis (pass "
+    "granularity), and fall "
     "back to query_database (raw SQL, "
     "SELECT or WITH ... SELECT) for anything else. Never answer from assumption "
     "or refuse before calling a tool — the tool result is authoritative, even "
@@ -159,10 +160,10 @@ tools = [
     {
         "name": "get_cohort_retention",
         "description": "Get cohort retention for customers: each customer's cohort is the calendar "
-                        "month or quarter of their first order within the given date range, and for "
-                        "each following period it reports what percentage of that cohort placed at "
-                        "least one more order. Use this for any retention/cohort analysis question, "
-                        "instead of query_database or code_execution.",
+                        "day, week, month, quarter, or year of their first order within the given "
+                        "date range, and for each following period it reports what percentage of "
+                        "that cohort placed at least one more order. Use this for any retention/"
+                        "cohort analysis question, instead of query_database or code_execution.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -170,7 +171,7 @@ tools = [
                 "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
                 "granularity": {
                     "type": "string",
-                    "enum": ["month", "quarter"],
+                    "enum": ["day", "week", "month", "quarter", "year"],
                     "description": "Cohort/period size. Defaults to month.",
                 },
             },
@@ -327,12 +328,33 @@ def get_active_users(start_date: str, end_date: str) -> str:
 
 
 _PERIOD_SQL = {
+    "day": {
+        "period": "date({0})",
+        # Julian day number is already a single increasing integer, so
+        # subtracting two of these directly gives the number of days
+        # between them.
+        "index": "CAST(julianday({0}) AS INTEGER)",
+        "label": "Day",
+        "adverb": "Daily",
+    },
+    "week": {
+        # Monday of the week containing {0}: shift forward to the next
+        # Sunday (or stay put if already Sunday), then back 6 days.
+        "period": "date({0}, 'weekday 0', '-6 days')",
+        # Weeks are always exactly 7 days apart once aligned to Monday, so
+        # dividing the Julian day number by 7 gives an increasing integer
+        # (SQLite integer/integer division truncates, which is exact here).
+        "index": "(CAST(julianday({0}) AS INTEGER) / 7)",
+        "label": "Week",
+        "adverb": "Weekly",
+    },
     "month": {
         "period": "strftime('%Y-%m', {0})",
         # (year*12 + month) as a single increasing integer, so subtracting
         # two of these directly gives the number of months between them.
         "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 12 + CAST(substr({0}, 6, 2) AS INTEGER))",
         "label": "Month",
+        "adverb": "Monthly",
     },
     "quarter": {
         "period": "(strftime('%Y', {0}) || '-Q' || ((CAST(strftime('%m', {0}) AS INTEGER) - 1) / 3 + 1))",
@@ -340,6 +362,13 @@ _PERIOD_SQL = {
         # single character right after the literal "-Q" in e.g. "2023-Q1".
         "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 4 + CAST(substr({0}, 7, 1) AS INTEGER))",
         "label": "Quarter",
+        "adverb": "Quarterly",
+    },
+    "year": {
+        "period": "strftime('%Y', {0})",
+        "index": "CAST({0} AS INTEGER)",
+        "label": "Year",
+        "adverb": "Yearly",
     },
 }
 
@@ -352,6 +381,7 @@ def get_cohort_retention(start_date: str, end_date: str, granularity: str = "mon
     period_expr = period_sql["period"]
     index_expr = period_sql["index"]
     label = period_sql["label"]
+    adverb = period_sql["adverb"]
 
     # offset 0 is always exactly the cohort (every member ordered in their
     # own first period by definition), so cohort size is read off that row
@@ -385,7 +415,7 @@ def get_cohort_retention(start_date: str, end_date: str, granularity: str = "mon
         rows = conn.execute(text(sql), {"start": start_date, "end": end_date}).fetchall()
 
     chart = {
-        "title": f"{label}ly cohort retention ({start_date} to {end_date})",
+        "title": f"{adverb} cohort retention ({start_date} to {end_date})",
         "chart_type": "cohort_heatmap",
         "period_label": label,
         "cohorts": [],
