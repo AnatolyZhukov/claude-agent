@@ -5,3 +5,6 @@ venv/
 CLAUDE.md
 __pycache__/
 eval/results/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

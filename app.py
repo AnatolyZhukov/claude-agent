@@ -1,27 +1,41 @@
+import logging
 import os
 
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
-
-# Locally the key comes from .env (loaded above). On Streamlit Community
-# Cloud there is no .env file, so fall back to st.secrets there.
-if "ANTHROPIC_API_KEY" not in os.environ:
-    try:
-        os.environ["ANTHROPIC_API_KEY"] = st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
-
-if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
-    try:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
-    except Exception:
-        pass
-
 from agent import ask
 from components import inject_css, render_history, render_info_panel, render_message, render_title
 from history import get_recent_history, log_rating
+
+logger = logging.getLogger(__name__)
+
+# Configured here, in the entry point: without it the warnings logged across
+# the app fall back to logging's lastResort handler (WARNING+, no timestamp,
+# no logger name), which is close to useless in the deployed container logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
+load_dotenv()
+
+
+def _load_secret_into_env(name: str) -> None:
+    """Locally the value comes from .env (loaded above). On Streamlit Community
+    Cloud there is no .env file, so fall back to st.secrets. A missing secret
+    is normal locally, so it's logged at debug, not surfaced.
+    """
+    if name in os.environ:
+        return
+    try:
+        os.environ[name] = st.secrets[name]
+    except Exception:
+        logger.debug("Secret %s not available from st.secrets", name)
+
+
+_load_secret_into_env("ANTHROPIC_API_KEY")
+_load_secret_into_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
 st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
 inject_css()
@@ -32,18 +46,31 @@ render_title("Sample Superstore Analyst")
 # interaction) — a short TTL keeps it close to live.
 get_recent_history_cached = st.cache_data(ttl=30)(get_recent_history)
 
+# st.feedback("thumbs") reports the clicked icon's index.
+_THUMBS_TO_RATING = {0: "down", 1: "up"}
 
-def _handle_rating(interaction_id: str, widget_key: str):
-    # Runs only on an actual click (st.feedback's on_change), not on every
-    # script rerun — the widget's new value is already in session_state
-    # under widget_key by the time this fires. None (icon clicked again to
-    # deselect) is a legitimate "clear my rating" and gets logged as such.
+# How much of the shared history the "Request History" tab shows. Used for both
+# the query and its caption, so the two can't drift apart. The day window is a
+# filter on the table's partitioning column, so widening it costs little.
+HISTORY_LIMIT = 100
+HISTORY_DAYS = 14
+
+
+def _handle_rating(interaction_id: str, widget_key: str) -> None:
+    """Logs a thumbs click.
+
+    Runs only on an actual click (st.feedback's on_change), not on every script
+    rerun — the widget's new value is already in session_state under widget_key
+    by the time this fires. A non-int value (icon clicked again to deselect)
+    is a legitimate "clear my rating" and gets logged as such.
+    """
     value = st.session_state.get(widget_key)
-    rating = {0: "down", 1: "up"}.get(value)
+    rating = _THUMBS_TO_RATING.get(value) if isinstance(value, int) else None
     try:
         log_rating(interaction_id, rating)
     except Exception:
-        pass
+        logger.warning("Failed to log rating for %s", interaction_id, exc_info=True)
+
 
 main_col, info_col = st.columns([3, 1], gap="large")
 
@@ -83,21 +110,28 @@ with main_col:
             st.session_state.messages.append({"role": "user", "content": question})
             with st.spinner("Thinking..."):
                 try:
-                    answer, charts, interaction_id = ask(question, history=chat_history)
+                    result = ask(question, history=chat_history)
+                    reply = {
+                        "role": "assistant", "content": result.answer,
+                        "charts": result.charts, "interaction_id": result.interaction_id,
+                    }
                 except Exception as e:
-                    answer, charts, interaction_id = f"Error: {e}", [], None
-            st.session_state.messages.append({
-                "role": "assistant", "content": answer, "charts": charts, "interaction_id": interaction_id,
-            })
+                    logger.warning("ask() failed", exc_info=True)
+                    reply = {
+                        "role": "assistant", "content": f"Error: {e}",
+                        "charts": [], "interaction_id": None,
+                    }
+            st.session_state.messages.append(reply)
             # Rerun so the message loop above (which now includes this exchange)
             # renders before the freshly-reset form, keeping the form pinned
             # after the last message instead of appearing above it.
             st.rerun()
 
     with history_tab:
-        st.caption("Last 20 questions from the past 5 days, across all sessions.")
+        st.caption(f"Last {HISTORY_LIMIT} questions from the past {HISTORY_DAYS} days, "
+                   "across all sessions.")
         try:
-            rows = get_recent_history_cached(limit=20, days=5)
+            rows = get_recent_history_cached(limit=HISTORY_LIMIT, days=HISTORY_DAYS)
         except Exception as e:
             st.error(f"Couldn't load history: {e}")
         else:

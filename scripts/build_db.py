@@ -23,12 +23,16 @@ SHEET_TO_TABLE = {
 
 
 def to_snake_case(column: str) -> str:
+    """Normalizes an Excel column header into a snake_case column name."""
     column = column.replace("/", "_")
     column = re.sub(r"[^0-9a-zA-Z]+", "_", column)
     return column.strip("_").lower()
 
 
 def main():
+    """Rebuilds data/sample_superstore.db from the Excel export, dropping
+    future-dated orders and the returns that referenced them.
+    """
     source_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_SOURCE_PATH
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{DB_PATH}")

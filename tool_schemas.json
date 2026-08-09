@@ -1,0 +1,83 @@
+[
+  {
+    "name": "query_database",
+    "description": "Run a single read-only SQL SELECT query against the sample_superstore SQLite database. Use ONLY for metrics not covered by the other tools (e.g. order count, profit breakdowns, customer/category lookups, year-over-year or other period-over-period comparisons). Prefer get_revenue for revenue and get_active_users for active users. For period-over-period questions (e.g. \"which category grew the most each year\"), do the actual comparison inside the SQL itself — e.g. window functions like LAG() to get the prior period's value per group, then rank within each period — and return one row per period with the answer, rather than dumping raw per-period-per-group totals and leaving the comparison for the reader to do by eye. When the result has more than one row, the app already renders it as a table — don't restate every row in text, just summarize the finding.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "sql": {
+          "type": "string",
+          "description": "A single SELECT statement, valid SQLite syntax."
+        }
+      },
+      "required": ["sql"]
+    }
+  },
+  {
+    "name": "get_revenue",
+    "description": "Get total revenue (sum) for a given date range, optionally filtered by region/category.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+        "region": {"type": "string", "description": "Optional exact region name to filter by"},
+        "category": {"type": "string", "description": "Optional exact category name to filter by"}
+      },
+      "required": ["start_date", "end_date"]
+    }
+  },
+  {
+    "name": "get_chart_data",
+    "description": "Get a metric broken down by a dimension (e.g. revenue by month, profit by category), suitable for rendering as a chart. Use this whenever the user asks to see/plot/chart/visualize a trend or a breakdown, instead of a single number.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "metric": {
+          "type": "string",
+          "enum": ["revenue", "profit", "orders"],
+          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id)."
+        },
+        "group_by": {
+          "type": "string",
+          "enum": ["month", "region", "category", "sub_category"],
+          "description": "Dimension to break the metric down by."
+        },
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+        "region": {"type": "string", "description": "Optional exact region name to filter by"},
+        "category": {"type": "string", "description": "Optional exact category name to filter by"}
+      },
+      "required": ["metric", "group_by", "start_date", "end_date"]
+    }
+  },
+  {
+    "name": "get_active_users",
+    "description": "Get the number of distinct/unique active users for a given date range. This is a non-additive metric — always computed as COUNT(DISTINCT user_id) over the full requested range, never summed from smaller periods.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"}
+      },
+      "required": ["start_date", "end_date"]
+    }
+  },
+  {
+    "name": "get_cohort_retention",
+    "description": "Get cohort retention for customers: each customer's cohort is the calendar day, week, month, quarter, or year of their first order within the given date range, and for each following period it reports what percentage of that cohort placed at least one more order. Use this for any retention/cohort analysis question, instead of query_database or code_execution.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+        "granularity": {
+          "type": "string",
+          "enum": ["day", "week", "month", "quarter", "year"],
+          "description": "Cohort/period size. Defaults to month."
+        }
+      },
+      "required": ["start_date", "end_date"]
+    }
+  }
+]
