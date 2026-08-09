@@ -6,7 +6,8 @@ from pathlib import Path
 
 from sqlalchemy import Engine, create_engine
 
-DB_PATH = Path(__file__).parent / "data" / "sample_superstore.db"
+# parents[1] is the project root: this module lives in the database/ package.
+DB_PATH = Path(__file__).parents[1] / "data" / "sample_superstore.db"
 
 # Upper bound on rows returned from a raw SELECT. Results hitting this limit
 # are explicitly reported as truncated (see queries.run_select) — a silently

@@ -1,5 +1,5 @@
-"""Tool dispatch: maps a tool call from the model to its implementation in
-queries.py, and loads the JSON schemas advertised to the API.
+"""Tool dispatch: maps a tool call from the model to its implementation in the
+database package, and loads the JSON schemas advertised to the API.
 """
 import json
 import logging
@@ -9,8 +9,8 @@ from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 
-import queries
 from contracts import ToolResult
+from database import queries
 
 logger = logging.getLogger(__name__)
 

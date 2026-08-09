@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import text
 
 from contracts import ChartType, ToolResult
-from db import MAX_ROWS, get_engine
+from database.engine import MAX_ROWS, get_engine
 
 
 def _apply_filters(sql: str, params: dict, region: str | None,

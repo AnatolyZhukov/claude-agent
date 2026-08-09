@@ -4,8 +4,8 @@ real (read-only) sample_superstore database.
 import pytest
 
 from contracts import ChartType
-from db import MAX_ROWS
-from queries import (
+from database import MAX_ROWS
+from database.queries import (
     _apply_filters,
     build_retention_matrix,
     get_active_users,

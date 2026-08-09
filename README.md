@@ -5,10 +5,9 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 ## Project structure
 
 - `agent.py` — orchestration: the (lazily built) Anthropic client, the system prompt, and `ask()`, which drives the tool-use loop and returns an `AskResult`.
-- `queries.py` — the SQL behind each tool; every function returns a `ToolResult`.
+- `database/` — everything that touches the database, and the only place that opens a connection or builds SQL: `engine.py` (the lazily built **read-only** SQLite engine and the row limit for raw queries) and `queries.py` (the SQL behind each tool; every function returns a `ToolResult`).
 - `tools.py` — tool dispatch: maps a tool call to its implementation and turns expected failures into an error `ToolResult`.
 - `tool_schemas.json` — the tool schemas advertised to the API, kept as data rather than a literal in code.
-- `db.py` — the lazily built **read-only** SQLite engine and the row limit for raw queries.
 - `contracts.py` — `ToolResult` and the `ChartType` enum: the shapes shared between the tool layer and the UI.
 - `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
@@ -80,7 +79,7 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has five tools (declared in `tool_schemas.json`, implemented in `queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
+- The agent has five tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 - Raw `query_database` results are capped at 200 rows, and a capped result says so explicitly in the text handed to the model — a silently truncated result would otherwise be reported as if it were complete.
