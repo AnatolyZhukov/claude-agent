@@ -8,9 +8,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 CAPABILITIES = [
     "Revenue & profit totals for any date range, filterable by region/category",
     "Active users (unique customers) for a period",
-    "Charts/breakdowns of revenue, profit, or orders by month, region, category, or sub-category",
-    "Cohort retention analysis, monthly or quarterly",
-    "Ad-hoc read-only SQL for anything else",
+    "Charts of revenue, profit, or orders by month, region, category, or sub-category",
+    "Cohort retention analysis (day/week/month/quarter/year) with a heatmap table",
+    "Ad-hoc read-only SQL for anything else — order counts, top customers, period-over-period comparisons, etc.",
+    "Remembers context within a chat session, and answers in whatever language you ask in",
 ]
 
 ROADMAP = []
