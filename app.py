@@ -1,27 +1,33 @@
+import logging
 import os
 
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
-
-# Locally the key comes from .env (loaded above). On Streamlit Community
-# Cloud there is no .env file, so fall back to st.secrets there.
-if "ANTHROPIC_API_KEY" not in os.environ:
-    try:
-        os.environ["ANTHROPIC_API_KEY"] = st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:
-        pass
-
-if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
-    try:
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = st.secrets["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
-    except Exception:
-        pass
-
 from agent import ask
 from components import inject_css, render_history, render_info_panel, render_message, render_title
 from history import get_recent_history, log_rating
+
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+
+def _load_secret_into_env(name: str) -> None:
+    """Locally the value comes from .env (loaded above). On Streamlit Community
+    Cloud there is no .env file, so fall back to st.secrets. A missing secret
+    is normal locally, so it's logged at debug, not surfaced.
+    """
+    if name in os.environ:
+        return
+    try:
+        os.environ[name] = st.secrets[name]
+    except Exception:
+        logger.debug("Secret %s not available from st.secrets", name)
+
+
+_load_secret_into_env("ANTHROPIC_API_KEY")
+_load_secret_into_env("GOOGLE_APPLICATION_CREDENTIALS_JSON")
 
 st.set_page_config(page_title="Sample Superstore Analyst", page_icon="📊", layout="wide")
 inject_css()
@@ -35,15 +41,16 @@ get_recent_history_cached = st.cache_data(ttl=30)(get_recent_history)
 
 def _handle_rating(interaction_id: str, widget_key: str):
     # Runs only on an actual click (st.feedback's on_change), not on every
-    # script rerun — the widget's new value is already in session_state
-    # under widget_key by the time this fires. None (icon clicked again to
-    # deselect) is a legitimate "clear my rating" and gets logged as such.
+    # script rerun — the widget's new value is already in session_state under
+    # widget_key by the time this fires. None (icon clicked again to deselect)
+    # is a legitimate "clear my rating" and gets logged as such.
     value = st.session_state.get(widget_key)
     rating = {0: "down", 1: "up"}.get(value)
     try:
         log_rating(interaction_id, rating)
     except Exception:
-        pass
+        logger.warning("Failed to log rating for %s", interaction_id, exc_info=True)
+
 
 main_col, info_col = st.columns([3, 1], gap="large")
 
@@ -83,8 +90,10 @@ with main_col:
             st.session_state.messages.append({"role": "user", "content": question})
             with st.spinner("Thinking..."):
                 try:
-                    answer, charts, interaction_id = ask(question, history=chat_history)
+                    result = ask(question, history=chat_history)
+                    answer, charts, interaction_id = result.answer, result.charts, result.interaction_id
                 except Exception as e:
+                    logger.warning("ask() failed", exc_info=True)
                     answer, charts, interaction_id = f"Error: {e}", [], None
             st.session_state.messages.append({
                 "role": "assistant", "content": answer, "charts": charts, "interaction_id": interaction_id,

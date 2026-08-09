@@ -134,10 +134,8 @@ def run_case(case: dict) -> tuple[bool, str]:
     grader = GRADERS.get(case["expected"]["type"])
     if grader is None:
         return False, f"unknown expected.type {case['expected']['type']!r}"
-    _answer, charts, _interaction_id, trace = ask(
-        case["question"], log_history=False, return_trace=True
-    )
-    return grader(case, trace, charts)
+    result = ask(case["question"], log_history=False)
+    return grader(case, result.trace, result.charts)
 
 
 def main():
