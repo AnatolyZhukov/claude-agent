@@ -59,9 +59,14 @@ SYSTEM_PROMPT = (
     "always use query_database/get_revenue/get_active_users/get_chart_data/"
     "get_cohort_retention for anything data-related, even for complex or "
     "multi-step analyses. get_chart_data and get_cohort_retention already "
-    "return everything needed for the app itself to render the chart/table — "
-    "never call code_execution to also plot, draw, or export an image after "
-    "one of these succeeds; just summarize the numbers in text. "
+    "return everything needed for the app itself to render the chart/table, "
+    "and query_database does the same whenever its result has more than one "
+    "row — never call code_execution to also plot, draw, or export an image "
+    "after one of these succeeds, and never restate a multi-row result as a "
+    "long run-on sentence of numbers; the app already shows it as a table, "
+    "so just summarize the finding (e.g. the trend, the winner, the "
+    "comparison) in a short sentence or two, or a short markdown list if "
+    "genuinely helpful. "
     "The database schema is:\n" + DB_SCHEMA + "\n"
     "If asked what you can do, respond: "
     "'I am an assistant for the sample_superstore database and can tell you about "
@@ -74,8 +79,17 @@ tools = [
         "name": "query_database",
         "description": "Run a single read-only SQL SELECT query against the sample_superstore "
                         "SQLite database. Use ONLY for metrics not covered by the other tools "
-                        "(e.g. order count, profit breakdowns, customer/category lookups). "
-                        "Prefer get_revenue for revenue and get_active_users for active users.",
+                        "(e.g. order count, profit breakdowns, customer/category lookups, "
+                        "year-over-year or other period-over-period comparisons). "
+                        "Prefer get_revenue for revenue and get_active_users for active users. "
+                        "For period-over-period questions (e.g. \"which category grew the most "
+                        "each year\"), do the actual comparison inside the SQL itself — e.g. window "
+                        "functions like LAG() to get the prior period's value per group, then rank "
+                        "within each period — and return one row per period with the answer, rather "
+                        "than dumping raw per-period-per-group totals and leaving the comparison for "
+                        "the reader to do by eye. "
+                        "When the result has more than one row, the app already renders it as a "
+                        "table — don't restate every row in text, just summarize the finding.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -189,7 +203,7 @@ if skills:
 MAX_ROWS = 200
 
 
-def run_select(sql: str) -> str:
+def run_select(sql: str):
     statement = sql.strip().rstrip(";")
     # WITH is allowed alongside SELECT so the model can write CTE-based
     # analyses (e.g. cohort retention) as a single query instead of reaching
@@ -214,7 +228,23 @@ def run_select(sql: str) -> str:
 
     lines = [", ".join(columns)]
     lines += [", ".join(str(v) for v in row) for row in rows]
-    return "\n".join(lines)
+    summary = "\n".join(lines)
+
+    # A single row (e.g. a plain aggregate) reads fine as one text line —
+    # only build a table for genuinely multi-row results, same contract as
+    # get_chart_data/get_cohort_retention: the app renders the table, the
+    # model just summarizes/interprets it in text instead of restating every
+    # row (which previously came out as one unreadable run-on sentence).
+    if len(rows) == 1:
+        return summary
+
+    table = {
+        "title": "Query results",
+        "chart_type": "table",
+        "columns": columns,
+        "rows": [list(row) for row in rows],
+    }
+    return summary, table
 
 
 def get_revenue(start_date: str, end_date: str, region: str = None, category: str = None) -> str:

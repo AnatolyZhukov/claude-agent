@@ -83,6 +83,14 @@ def render_cohort_table_html(chart: dict) -> str:
 
 
 def render_chart(chart: dict):
+    if chart["chart_type"] == "table":
+        # No subheader here (unlike the branches below) — "Query results" adds
+        # no information above a self-explanatory dataframe with real column
+        # names.
+        df = pd.DataFrame(chart["rows"], columns=chart["columns"])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        return
+
     st.subheader(chart["title"])
     if chart["chart_type"] == "cohort_heatmap":
         if not chart["cohorts"]:
