@@ -2,32 +2,10 @@
 
 `engine` owns the connection (read-only, built lazily); `queries` owns the SQL
 behind each tool and returns `ToolResult`s. Nothing above this package builds
-SQL or opens a connection of its own — the agent talks to it only through
+SQL or opens a connection of its own — the agent reaches it only through
 tools.py's dispatcher.
 
-The public names are re-exported here so callers import from the package
-rather than reaching into its modules.
+Deliberately empty of re-exports: with only two modules here, a facade would
+just add a second way to import the same name, and callers importing from the
+module that actually defines a thing is clearer than a package-level alias.
 """
-from database.engine import DB_PATH, MAX_ROWS, get_engine
-from database.queries import (
-    build_retention_matrix,
-    get_active_users,
-    get_chart_data,
-    get_cohort_retention,
-    get_revenue,
-    run_select,
-    validate_select,
-)
-
-__all__ = [
-    "DB_PATH",
-    "MAX_ROWS",
-    "build_retention_matrix",
-    "get_active_users",
-    "get_chart_data",
-    "get_cohort_retention",
-    "get_engine",
-    "get_revenue",
-    "run_select",
-    "validate_select",
-]
