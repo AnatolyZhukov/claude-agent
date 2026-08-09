@@ -1,0 +1,293 @@
+[
+  {
+    "id": "active_users_2023",
+    "question": "How many active/unique customers were there in 2023?",
+    "expected_tool": "get_active_users",
+    "expected": {"type": "numeric", "value": 605, "tolerance": 0},
+    "tags": ["active_users"]
+  },
+  {
+    "id": "revenue_2025_full_year",
+    "question": "What was the total revenue in 2025?",
+    "expected_tool": "get_revenue",
+    "expected": {"type": "numeric", "value": 613933.58, "tolerance": 0.01},
+    "tags": ["revenue", "date-rounding-regression"]
+  },
+  {
+    "id": "revenue_2020_no_data",
+    "question": "What was the total revenue in 2020?",
+    "expected_tool": "get_revenue",
+    "expected": {"type": "numeric", "value": 0, "tolerance": 0.01},
+    "tags": ["revenue", "no-data-period"]
+  },
+  {
+    "id": "revenue_by_month_2023_chart",
+    "question": "Show me revenue by month for 2023",
+    "expected_tool": "get_chart_data",
+    "expected": {"type": "chart_total", "value": 494040.21, "tolerance": 0.01},
+    "tags": ["chart", "revenue"]
+  },
+
+  {
+    "id": "bench_total_sales",
+    "question": "What is the total sales across all orders?",
+    "expected_tool": "get_revenue",
+    "expected": {"type": "numeric", "value": 1895881.58, "tolerance": 0.01},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_total_profit",
+    "question": "What is the total profit across all orders?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": 244172.32, "tolerance": 0.01},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_unique_orders",
+    "question": "How many unique orders are there in total?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": 4145, "tolerance": 0},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_unique_customers",
+    "question": "How many unique customers are there in total?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": 800, "tolerance": 0},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_avg_discount",
+    "question": "What is the average discount across all orders?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": [0.1556, 15.56], "tolerance": 0.05},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_avg_profit_per_order",
+    "question": "What is the average profit per order?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": 58.91, "tolerance": 0.01},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_avg_order_value",
+    "question": "What is the average order value (average total sales per order)?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": 457.39, "tolerance": 0.01},
+    "tags": ["benchmark", "medium"]
+  },
+  {
+    "id": "bench_pct_discount_over_20",
+    "question": "What percentage of orders have a discount greater than 20%?",
+    "expected_tool": "query_database",
+    "expected": {"type": "numeric", "value": [0.2043, 20.43], "tolerance": 0.05},
+    "tags": ["benchmark", "medium", "known-issue"],
+    "notes": "Discovered issue (2026-08-09): the agent's SQL sometimes divides a row-count of discount>0.20 line items by COUNT(DISTINCT order_id), mixing granularities, reporting 28.18% instead of the correct 20.43% (share of DISTINCT orders with at least one qualifying line item, matching COUNT(DISTINCT IF(discount>0.20, order_id, NULL))/COUNT(DISTINCT order_id)). Intermittent -- the model doesn't reliably write the same SQL for this question across runs, so this case flips between PASS and FAIL."
+  },
+
+  {
+    "id": "bench_top_product_by_qty",
+    "question": "Which product has the highest total quantity sold?",
+    "expected_tool": "query_database",
+    "expected": {"type": "top_entity", "label": "Staples", "value": 185, "tolerance": 1},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_top_category_sales",
+    "question": "Which category has the highest total sales?",
+    "expected_tool": ["query_database", "get_chart_data"],
+    "expected": {"type": "top_entity", "label": "Technology", "value": 694375.98, "tolerance": 1},
+    "tags": ["benchmark", "easy"],
+    "notes": "get_chart_data(metric=revenue, group_by=category) answers this equally well as raw SQL -- observed the model pick either one across runs at temperature=0.2."
+  },
+  {
+    "id": "bench_top_category_profit",
+    "question": "Which category has the highest total profit?",
+    "expected_tool": ["query_database", "get_chart_data"],
+    "expected": {"type": "top_entity", "label": "Technology", "value": 120388.10, "tolerance": 1},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_top_subcategory_profit",
+    "question": "Which sub-category has the highest total profit?",
+    "expected_tool": ["query_database", "get_chart_data"],
+    "expected": {"type": "top_entity", "label": "Copiers", "value": 43669.90, "tolerance": 1},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_top_region_margin",
+    "question": "Which region has the highest profit margin?",
+    "expected_tool": "query_database",
+    "expected": {"type": "top_entity", "label": "West", "value": [0.1460, 14.60], "tolerance": 0.05},
+    "tags": ["benchmark", "medium"]
+  },
+  {
+    "id": "bench_top_discount_negative_subcat",
+    "question": "Which sub-category has the highest average discount among sub-categories with negative total profit?",
+    "expected_tool": "query_database",
+    "expected": {"type": "top_entity", "label": "Tables", "value": [0.2609, 26.09], "tolerance": 0.05},
+    "tags": ["benchmark", "hard"]
+  },
+
+  {
+    "id": "bench_orders_per_ship_mode",
+    "question": "How many unique orders are there for each ship mode?",
+    "expected_tool": "query_database",
+    "expected": {"type": "list_contains", "items": ["Standard Class", "Second Class", "First Class", "Same Day"]},
+    "tags": ["benchmark", "easy"]
+  },
+  {
+    "id": "bench_sales_by_region",
+    "question": "What are the total sales for each region?",
+    "expected_tool": "get_chart_data",
+    "expected": {"type": "list_contains", "items": ["Central", "East", "South", "West"]},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_top10_customers_profit",
+    "question": "Which 10 customers generated the highest total profit?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": [
+        "Tamara Chand", "Raymond Buch", "Sanjit Chand", "Adrian Barton",
+        "Christopher Martinez", "Keith Dawkins", "Andy Reiter",
+        "Tom Boeckenhauer", "Nathan Mautz", "Daniel Raglin"
+      ]
+    },
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_top10_customers_sales",
+    "question": "Which 10 customers generated the highest total sales?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": [
+        "Sean Miller", "Tamara Chand", "Raymond Buch", "Ken Lonsdale",
+        "Sanjit Chand", "Adrian Barton", "Sanjit Engle",
+        "Christopher Conant", "Becky Martin", "Greg Tran"
+      ]
+    },
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_avg_discount_by_category",
+    "question": "What is the average discount for each category?",
+    "expected_tool": "query_database",
+    "expected": {"type": "list_contains", "items": ["Furniture", "Office Supplies", "Technology"]},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_units_by_region",
+    "question": "How many units were sold in each region?",
+    "expected_tool": "query_database",
+    "expected": {"type": "list_contains", "items": ["Central", "East", "South", "West"]},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_negative_profit_subcats",
+    "question": "Which sub-categories have negative total profit?",
+    "expected_tool": ["query_database", "get_chart_data"],
+    "expected": {"type": "list_contains", "items": ["Tables", "Bookcases", "Supplies"]},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_profit_by_segment",
+    "question": "What is the total profit for each customer segment?",
+    "expected_tool": "query_database",
+    "expected": {"type": "list_contains", "items": ["Consumer", "Corporate", "Home Office"]},
+    "tags": ["benchmark", "easy-medium"]
+  },
+  {
+    "id": "bench_margin_by_category",
+    "question": "What is the profit margin for each category?",
+    "expected_tool": "query_database",
+    "expected": {"type": "list_contains", "items": ["Office Supplies", "Technology", "Furniture"]},
+    "tags": ["benchmark", "medium"]
+  },
+  {
+    "id": "bench_products_over_10k",
+    "question": "Which products have total sales greater than $10,000?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": [
+        "Canon imageCLASS 2200 Advanced Copier",
+        "Cisco TelePresence System EX90 Videoconferencing Unit",
+        "Fellowes PB500 Electric Punch Plastic Comb Binding Machine with Manual Bind",
+        "GBC Ibimaster 500 Manual ProClick Binding System",
+        "HP Designjet T520 Inkjet Large Format Printer - 24\" Color",
+        "HON 5400 Series Task Chairs for Big and Tall",
+        "High Speed Automatic Electric Letter Opener",
+        "Lexmark MX611dhe Monochrome Laser Printer",
+        "GBC DocuBind P400 Electric Binding System",
+        "Hewlett Packard LaserJet 3310 Copier",
+        "Riverside Palais Royal Lawyers Bookcase, Royale Cherry Finish",
+        "Ibico EPK-21 Electric Binding System",
+        "Global Deluxe High-Back Manager's Chair",
+        "Canon PC1060 Personal Laser Copier",
+        "GBC DocuBind TL300 Electric Binding System",
+        "Honeywell Enviracaire Portable HEPA Air Cleaner for 17' x 22' Room",
+        "Bretford Rectangular Conference Table Tops",
+        "Cubify CubeX 3D Printer Double Head Print",
+        "DMI Eclipse Executive Suite Bookcases",
+        "Tennsco 6- and 18-Compartment Lockers"
+      ]
+    },
+    "tags": ["benchmark", "medium"],
+    "notes": "Ground truth has 24 qualifying products; only checking the top 20 (dropping the bottom 4, which sit closest to the $10k boundary) since a full 24-item enumeration is the kind of thing the model may reasonably truncate for conciseness on a run-to-run basis."
+  },
+  {
+    "id": "bench_top3_products_per_category",
+    "question": "What are the top 3 products by sales within each category?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": [
+        "HON 5400 Series Task Chairs for Big and Tall",
+        "Riverside Palais Royal Lawyers Bookcase, Royale Cherry Finish",
+        "Global Deluxe High-Back Manager's Chair",
+        "Fellowes PB500 Electric Punch Plastic Comb Binding Machine with Manual Bind",
+        "GBC Ibimaster 500 Manual ProClick Binding System",
+        "High Speed Automatic Electric Letter Opener",
+        "Canon imageCLASS 2200 Advanced Copier",
+        "Cisco TelePresence System EX90 Videoconferencing Unit",
+        "HP Designjet T520 Inkjet Large Format Printer - 24\" Color"
+      ]
+    },
+    "tags": ["benchmark", "hard", "window-functions"],
+    "notes": "SQLite rejects a window function referenced directly in HAVING (\"misuse of window function\"); a correct answer requires the model to retry with a CTE. find_tool_call() in run_eval.py prefers the last successful call for this reason."
+  },
+  {
+    "id": "bench_top10_sales_negative_profit",
+    "question": "Which products are in the top 10 by sales but have negative profit?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": [
+        "Cisco TelePresence System EX90 Videoconferencing Unit",
+        "High Speed Automatic Electric Letter Opener",
+        "Lexmark MX611dhe Monochrome Laser Printer",
+        "GBC DocuBind P400 Electric Binding System"
+      ],
+      "not_items": [
+        "Riverside Palais Royal Lawyers Bookcase, Royale Cherry Finish",
+        "Bretford Rectangular Conference Table Tops"
+      ]
+    },
+    "tags": ["benchmark", "hard", "known-issue"],
+    "notes": "Discovered issue (2026-08-09): 'top 10 by sales' should mean the intersection of {overall top-10-by-sales} and {negative profit} (4 products, per the benchmark's own RANK()<=10 AND profit<0 query). The agent sometimes instead filters to negative-profit products first, then takes the top 10 of THAT set by sales -- a different, larger set that pulls in products (e.g. the two in not_items) well outside the real top-10-by-sales. Intermittent -- the model doesn't reliably write the same SQL for this question across runs, so this case flips between PASS and FAIL."
+  },
+  {
+    "id": "bench_top10_both_sales_and_profit",
+    "question": "Which customers are simultaneously in the top 10 by sales and top 10 by profit?",
+    "expected_tool": "query_database",
+    "expected": {
+      "type": "list_contains",
+      "items": ["Tamara Chand", "Raymond Buch", "Sanjit Chand", "Adrian Barton"]
+    },
+    "tags": ["benchmark", "hard"]
+  }
+]

@@ -467,7 +467,8 @@ def _has_unsafe_code_execution(content_blocks) -> bool:
     return False
 
 
-def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
+def ask(question: str, history: list = None, log_history: bool = True,
+        return_trace: bool = False) -> tuple:
     messages = list(history) if history else []
     messages.append({"role": "user", "content": question})
 
@@ -503,6 +504,11 @@ def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
     # tool already succeeded), we can still hand back the real data already
     # fetched instead of a blanket refusal that would hide a correct answer.
     tool_summaries = []
+    # One entry per tool_use block actually executed this ask() call, only
+    # populated (and only returned) when return_trace=True — used by
+    # eval/run_eval.py to grade against the tool's raw result instead of
+    # parsing the model's free-text final answer.
+    trace = []
     # Guards our own client-side tool loop (e.g. a tool call that keeps
     # failing and getting retried) from growing the conversation without
     # bound. It does NOT cover code_execution runaways, since that tool is
@@ -520,10 +526,13 @@ def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
 
     def finish(answer):
         interaction_id = None
-        try:
-            interaction_id = log_interaction(question, answer, content_turns)
-        except Exception:
-            pass
+        if log_history:
+            try:
+                interaction_id = log_interaction(question, answer, content_turns)
+            except Exception:
+                pass
+        if return_trace:
+            return answer, charts, interaction_id, trace
         return answer, charts, interaction_id
 
     for _ in range(MAX_TURNS):
@@ -572,6 +581,12 @@ def ask(question: str, history: list = None) -> tuple[str, list, str | None]:
                         charts.append(chart)
                     if not str(result).startswith("Error:"):
                         tool_summaries.append(str(result))
+                    trace.append({
+                        "tool": block.name,
+                        "input": block.input,
+                        "result": result,
+                        "is_error": str(result).startswith("Error:"),
+                    })
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
