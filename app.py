@@ -49,6 +49,12 @@ get_recent_history_cached = st.cache_data(ttl=30)(get_recent_history)
 # st.feedback("thumbs") reports the clicked icon's index.
 _THUMBS_TO_RATING = {0: "down", 1: "up"}
 
+# How much of the shared history the "Request History" tab shows. Used for both
+# the query and its caption, so the two can't drift apart. The day window is a
+# filter on the table's partitioning column, so widening it costs little.
+HISTORY_LIMIT = 100
+HISTORY_DAYS = 14
+
 
 def _handle_rating(interaction_id: str, widget_key: str) -> None:
     """Logs a thumbs click.
@@ -122,9 +128,10 @@ with main_col:
             st.rerun()
 
     with history_tab:
-        st.caption("Last 20 questions from the past 5 days, across all sessions.")
+        st.caption(f"Last {HISTORY_LIMIT} questions from the past {HISTORY_DAYS} days, "
+                   "across all sessions.")
         try:
-            rows = get_recent_history_cached(limit=20, days=5)
+            rows = get_recent_history_cached(limit=HISTORY_LIMIT, days=HISTORY_DAYS)
         except Exception as e:
             st.error(f"Couldn't load history: {e}")
         else:
