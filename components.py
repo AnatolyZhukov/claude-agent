@@ -13,10 +13,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 CAPABILITIES = [
     "Revenue & profit totals for any date range, filterable by region/category",
     "Active users (unique customers) for a period",
-    "Charts of revenue, profit, or orders by month, region, category, or sub-category",
+    "Charts of revenue, profit, orders, quantity, revenue per order, profit margin, "
+    "or discount rate by month, region, category, or sub-category",
     "Cohort retention analysis (day/week/month/quarter/year) with a heatmap table",
     "Dashboard-style HTML report (KPIs vs. previous period, trend, category/region "
-    "breakdown, top sub-categories), downloadable as a standalone .html file",
+    "breakdown, top sub-categories — for any of the metrics above), downloadable "
+    "as a standalone .html file",
     "Ad-hoc read-only SQL for anything else — order counts, top customers, "
     "period-over-period comparisons, etc.",
     "Remembers context within a chat session, and answers in whatever language you ask in",
