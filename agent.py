@@ -141,6 +141,15 @@ SYSTEM_PROMPT = (
     "<db_schema>\n" + DB_SCHEMA + "\n</db_schema>"
 )
 
+# The `system` param as sent to the API: a single text block with an ephemeral
+# cache_control breakpoint. SYSTEM_PROMPT (~2400 tokens together with the tool
+# schemas — comfortably over the 1024-token cache minimum) is identical on
+# every ask() call, so caching it means only the actual per-turn messages get
+# reprocessed instead of the whole prompt on every question.
+SYSTEM_PROMPT_BLOCK = [
+    {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+]
+
 
 def build_skills() -> list[dict]:
     """The Skills attached through the request container, or [] if no SKILL_ID
@@ -162,10 +171,20 @@ def build_tools(skills: list[dict]) -> list[dict]:
     tool is enabled"). So it's mandatory whenever a skill is set, not just for
     skills that actually execute scripts. Takes `skills` as an argument rather
     than reading the environment again, so one ask() resolves it exactly once.
+
+    The last tool in the returned list carries an ephemeral cache_control
+    breakpoint — the whole tool list is identical on every ask() call (it
+    doesn't depend on the question), so caching it avoids Claude reprocessing
+    the same ~1500+ tokens of schemas on every single turn. The last entry is
+    replaced with a shallow copy rather than mutated in place, since
+    load_tool_schemas() is @cache'd and its dicts are shared across every
+    call — mutating one would leak cache_control into the cached schema
+    itself and into every other caller.
     """
     tools = list(load_tool_schemas())
     if skills:
         tools.append({"type": "code_execution_20250825", "name": "code_execution"})
+    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
     return tools
 
 
@@ -259,7 +278,7 @@ def ask(question: str, history: list[dict] | None = None,
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
         "temperature": TEMPERATURE,
-        "system": SYSTEM_PROMPT,
+        "system": SYSTEM_PROMPT_BLOCK,
         "tools": build_tools(skills),
         "messages": messages,
         "timeout": REQUEST_TIMEOUT,
