@@ -11,7 +11,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 - `contracts.py` — `ToolResult` and the `ChartType` enum: the shapes shared between the tool layer and the UI.
 - `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
-- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it — currently there isn't).
+- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the self-contained HTML dashboard report (KPI cards, inline-SVG trend, category/region breakdown, detail table), the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it — currently there isn't).
 - `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
 - `dbt_schema.py` + `dbt_demo/` — generates the system prompt's schema section from a dbt-style `sources.yml` instead of a hand-written string. See [dbt-as-schema-documentation demo](#dbt-as-schema-documentation-demo) below.
 - `static/style.css` — CSS for the Streamlit UI (table borders/padding, centered title).
@@ -80,7 +80,7 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has five tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
+- The agent has six tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), `generate_report` for a dashboard-style HTML report (see [Dashboard report](#dashboard-report) below), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 - Raw `query_database` results are capped at 200 rows, and a capped result says so explicitly in the text handed to the model — a silently truncated result would otherwise be reported as if it were complete.
@@ -92,6 +92,12 @@ When `GOOGLE_APPLICATION_CREDENTIALS_JSON` is set, every call to `ask()` logs a 
 
 Ratings live in their own append-only table rather than a `rating` column updated in place, and inserts go through BigQuery **load jobs** rather than streaming inserts or DML — a GCP project with no billing account runs BigQuery in "sandbox mode", which rejects streaming inserts, `INSERT`, and `UPDATE` outright, but still allows batch load jobs. If `GOOGLE_APPLICATION_CREDENTIALS_JSON` isn't set, both features silently no-op — the chat still works, there's just no history/rating.
 
+## Dashboard report
+
+Asking for a "dashboard" or "summary report" for a period (optionally filtered by region/category) calls `generate_report`, which computes revenue/profit/orders KPIs against the immediately preceding period of the same length (Tableau's "vs PM/PY" pattern), plus a monthly trend, a category × region breakdown, and a top-5 sub-categories table — all in one query round-trip per section, no new ORM logic. An optional `metric` argument (defaults to `revenue`; same catalog `get_chart_data` draws from) rebuilds those three sections around a different measure — plain aggregates `profit`, `orders`, `quantity` (units sold), or derived ratios `revenue_per_order` (a.k.a. average order value), `profit_margin`, `discount_rate` — while the KPI row always shows revenue/profit/orders regardless of that choice, same as the Tableau reference dashboards this was modeled on. Each metric in `database/queries.py::METRIC_FORMAT` declares how its value should render (money/count/percent) via the shared `MetricFormat` enum in `contracts.py`, so `components.py`'s renderer formats correctly without knowing the metric's name — adding another metric later is a two-line change (`METRIC_SQL` + `METRIC_FORMAT`), not a new formatting branch. `components.py::build_report_html` turns the structured payload into a single self-contained HTML document (inline `<style>`, hand-rolled inline-SVG line chart, no charting library or external assets), shown in the chat via `st.iframe` and offered as a `.html` download via `st.download_button`.
+
+There's deliberately no PDF export: it would need either a pure-Python renderer with weak SVG/CSS support (`xhtml2pdf`) or one needing system libraries that complicate deploying to Streamlit Community Cloud (`weasyprint`). The downloaded HTML file can always be printed to PDF through the browser's own print dialog if needed, at zero cost to this project.
+
 ## Tests & linting
 
 Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
@@ -100,7 +106,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-86 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+149 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

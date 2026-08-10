@@ -35,8 +35,8 @@
       "properties": {
         "metric": {
           "type": "string",
-          "enum": ["revenue", "profit", "orders"],
-          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id)."
+          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate"],
+          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id), quantity = SUM(quantity) (units sold). Derived (ratio) metrics, not summable totals: revenue_per_order = revenue / orders (a.k.a. average order value / AOV), profit_margin = profit / revenue (a fraction, e.g. 0.15 for 15%), discount_rate = average discount applied (a fraction)."
         },
         "group_by": {
           "type": "string",
@@ -59,6 +59,25 @@
       "properties": {
         "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
         "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"}
+      },
+      "required": ["start_date", "end_date"]
+    }
+  },
+  {
+    "name": "generate_report",
+    "description": "Generate a dashboard-style report for a date range: revenue/profit/orders KPIs compared against the immediately preceding period of the same length (always shown, regardless of `metric`), plus a monthly trend, a breakdown by category and region, and a top-5 sub-categories table — all three driven by `metric`. Use this when the user asks for a dashboard, summary report, or overview of the business for a period — not for a single-metric question, which should use get_revenue/get_active_users/get_chart_data instead.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+        "region": {"type": "string", "description": "Optional exact region name to filter by"},
+        "category": {"type": "string", "description": "Optional exact category name to filter by"},
+        "metric": {
+          "type": "string",
+          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate"],
+          "description": "Which metric drives the monthly trend, category/region breakdown, and top sub-categories table. Defaults to revenue. Options: revenue, profit, orders, quantity (units sold), revenue_per_order (a.k.a. average order value / AOV), profit_margin (profit as a % of revenue), discount_rate (average discount applied, as a %). Use this to rebuild the dashboard around a different metric — e.g. metric=orders for order volume, or metric=profit_margin when the user asks about margins rather than totals. The KPI row itself always shows revenue, profit, and orders together no matter what's picked here."
+        }
       },
       "required": ["start_date", "end_date"]
     }
