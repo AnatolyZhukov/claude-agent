@@ -39,6 +39,10 @@ _TOOL_HANDLERS: dict[str, Callable[[dict], ToolResult]] = {
         i["metric"], i["group_by"], i["start_date"], i["end_date"],
         i.get("region"), i.get("category"),
     ),
+    "generate_report": lambda i: queries.get_report_data(
+        i["start_date"], i["end_date"], i.get("region"), i.get("category"),
+        i.get("metric", "revenue"),
+    ),
 }
 
 

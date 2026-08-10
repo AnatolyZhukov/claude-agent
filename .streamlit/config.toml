@@ -1,0 +1,6 @@
+[server]
+# Disable the watchdog file watcher. Deployed apps don't need hot-reload on
+# file changes, and Streamlit Cloud's shared containers can hit the host's
+# inotify watch limit (OSError: [Errno 28] inotify watch limit reached),
+# which crashes the app at startup.
+fileWatcherType = "none"

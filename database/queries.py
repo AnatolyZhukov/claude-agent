@@ -5,11 +5,12 @@ tools.py never has to inspect the shape of what came back.
 """
 import re
 from collections.abc import Iterable
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import text
 
-from contracts import ChartType, ToolResult
+from contracts import ChartType, MetricFormat, ToolResult
 from database.engine import MAX_ROWS, get_engine
 
 
@@ -127,12 +128,44 @@ METRIC_SQL = {
     "revenue": "SUM(sales)",
     "profit": "SUM(profit)",
     "orders": "COUNT(DISTINCT order_id)",
+    "quantity": "SUM(quantity)",
+    # Derived (ratio) metrics rather than plain aggregates. Safe to divide
+    # unguarded: every group these are used in (GROUP BY month/region/
+    # category/sub_category) is non-empty by construction, so
+    # COUNT(DISTINCT order_id) is always >= 1, and every order line has a
+    # positive `sales` amount, so SUM(sales) is always > 0 — there's no
+    # reachable zero-denominator group to divide by.
+    "revenue_per_order": "SUM(sales) * 1.0 / COUNT(DISTINCT order_id)",
+    "profit_margin": "SUM(profit) * 1.0 / SUM(sales)",
+    # AVG needs no such reasoning — SQLite's AVG is itself a safe aggregate
+    # (NULL only over an empty group, and groups here are never empty).
+    "discount_rate": "AVG(discount)",
 }
 GROUP_BY_SQL = {
     "month": "strftime('%Y-%m', order_date)",
     "region": "region",
     "category": "category",
     "sub_category": "sub_category",
+}
+
+# Display name for each metric — used both for report titles/columns and
+# get_chart_data's chart title, so "profit_margin" reads as "Profit margin"
+# everywhere instead of leaking the raw snake_case key to the user.
+_METRIC_LABELS = {
+    "revenue": "Revenue", "profit": "Profit", "orders": "Orders", "quantity": "Quantity",
+    "revenue_per_order": "Revenue per order", "profit_margin": "Profit margin",
+    "discount_rate": "Discount rate",
+}
+
+# How each metric's raw numeric value should be displayed — read by
+# components.py's report renderer via the "format" field on breakdown/table
+# payloads (see get_report_data), so the renderer never has to know the
+# metric's name, only its format.
+METRIC_FORMAT = {
+    "revenue": MetricFormat.MONEY, "profit": MetricFormat.MONEY,
+    "orders": MetricFormat.COUNT, "quantity": MetricFormat.COUNT,
+    "revenue_per_order": MetricFormat.MONEY,
+    "profit_margin": MetricFormat.PERCENT, "discount_rate": MetricFormat.PERCENT,
 }
 
 
@@ -162,7 +195,7 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
     # read by name rather than by position.
     data: dict = {row.label: row.value for row in rows}
 
-    title = f"{metric} by {group_by}"
+    title = f"{_METRIC_LABELS[metric].lower()} by {group_by}"
     if region:
         title += f" ({region})"
     if category:
@@ -175,6 +208,156 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
 
     summary = "\n".join(f"{label}: {value}" for label, value in data.items())
     return ToolResult(summary or "No data.", chart=chart)
+
+
+def _previous_period(start_date: str, end_date: str) -> tuple[str, str]:
+    """The immediately preceding period of the same length as
+    [start_date, end_date], for period-over-period KPI deltas (Tableau's
+    "vs PM"/"vs PY" pattern).
+    """
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    length_days = (end - start).days + 1
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=length_days - 1)
+    return prev_start.isoformat(), prev_end.isoformat()
+
+
+def _period_totals(start_date: str, end_date: str, region: str | None,
+                   category: str | None) -> dict[str, float]:
+    """revenue/profit/orders totals for one date range, in a single query."""
+    sql = ("SELECT SUM(sales) AS revenue, SUM(profit) AS profit, "
+           "COUNT(DISTINCT order_id) AS orders FROM orders "
+           "WHERE date(order_date) BETWEEN :start AND :end")
+    params = {"start": start_date, "end": end_date}
+    sql = _apply_filters(sql, params, region, category)
+
+    with get_engine().connect() as conn:
+        row = conn.execute(text(sql), params).one()
+
+    return {"revenue": row.revenue or 0.0, "profit": row.profit or 0.0, "orders": row.orders or 0}
+
+
+def _delta_pct(value: float, prev_value: float) -> float | None:
+    """Percent change vs `prev_value`, or None when there's no prior baseline
+    to compare against (division by zero).
+    """
+    if not prev_value:
+        return None
+    return round((value - prev_value) / prev_value * 100, 1)
+
+
+def get_report_data(start_date: str, end_date: str, region: str | None = None,
+                    category: str | None = None, metric: str = "revenue") -> ToolResult:
+    """A dashboard-style report: revenue/profit/orders KPIs vs. the
+    immediately preceding period of the same length, plus a monthly trend, a
+    category x region breakdown, and a top-5 sub-categories table all driven
+    by `metric` (default revenue) — pass metric="orders"/"profit" to rebuild
+    those three sections around a different measure. The KPI row always shows
+    all three metrics regardless of this choice, same as the Tableau
+    reference dashboards this was modeled on (their metric picker only ever
+    changed the detail sections, never the top KPI cards).
+
+    KeyError on an invalid metric is the real guard (see get_chart_data) —
+    the input_schema enum should keep the model from sending anything else.
+
+    Returns everything as one structured `chart` payload (chart_type REPORT)
+    — components.py owns turning it into the actual HTML report, this
+    function only ever deals in SQL and plain data, same division of labor as
+    every other tool here.
+    """
+    metric_expr = METRIC_SQL[metric]
+    metric_label = _METRIC_LABELS[metric]
+    metric_format = METRIC_FORMAT[metric]
+
+    totals = _period_totals(start_date, end_date, region, category)
+    prev_start, prev_end = _previous_period(start_date, end_date)
+    prev_totals = _period_totals(prev_start, prev_end, region, category)
+
+    kpis = [
+        {
+            "label": _METRIC_LABELS[m],
+            "value": totals[m],
+            "prev_value": prev_totals[m],
+            "delta_pct": _delta_pct(totals[m], prev_totals[m]),
+        }
+        for m in ("revenue", "profit", "orders")
+    ]
+
+    month_expr = GROUP_BY_SQL["month"]
+    trend_sql = (f"SELECT {month_expr} AS label, {metric_expr} AS value FROM orders "
+                f"WHERE date(order_date) BETWEEN :start AND :end")
+    trend_params = {"start": start_date, "end": end_date}
+    trend_sql = _apply_filters(trend_sql, trend_params, region, category)
+    trend_sql += f" GROUP BY {month_expr} ORDER BY {month_expr}"
+    with get_engine().connect() as conn:
+        trend_rows = conn.execute(text(trend_sql), trend_params).fetchall()
+    trend = {row.label: row.value for row in trend_rows}
+
+    grid_sql = (f"SELECT category, region, {metric_expr} AS value FROM orders "
+               "WHERE date(order_date) BETWEEN :start AND :end")
+    grid_params = {"start": start_date, "end": end_date}
+    grid_sql = _apply_filters(grid_sql, grid_params, region, category)
+    grid_sql += " GROUP BY category, region"
+    with get_engine().connect() as conn:
+        grid_rows = conn.execute(text(grid_sql), grid_params).fetchall()
+    categories = sorted({row.category for row in grid_rows})
+    regions = sorted({row.region for row in grid_rows})
+    grid_values = {(row.category, row.region): row.value for row in grid_rows}
+    matrix = [[grid_values.get((c, r), 0.0) for r in regions] for c in categories]
+
+    table_sql = (f"SELECT sub_category, {metric_expr} AS value FROM orders "
+                "WHERE date(order_date) BETWEEN :start AND :end")
+    table_params = {"start": start_date, "end": end_date}
+    table_sql = _apply_filters(table_sql, table_params, region, category)
+    table_sql += " GROUP BY sub_category ORDER BY value DESC LIMIT 5"
+    with get_engine().connect() as conn:
+        table_rows = conn.execute(text(table_sql), table_params).fetchall()
+
+    title = f"Report: {start_date} to {end_date}"
+    if region:
+        title += f" ({region})"
+    if category:
+        title += f" ({category})"
+
+    report = {
+        "title": title,
+        "chart_type": ChartType.REPORT,
+        "period": {"start": start_date, "end": end_date},
+        "prev_period": {"start": prev_start, "end": prev_end},
+        "kpis": kpis,
+        "trend": {"title": f"{metric_label} by month", "data": trend},
+        "breakdown": {
+            "title": f"{metric_label} by category & region",
+            "categories": categories,
+            "regions": regions,
+            "matrix": matrix,
+            "metric": metric,
+            "format": metric_format,
+        },
+        "table": {
+            "title": f"Top sub-categories by {metric_label.lower()}",
+            "columns": ["Sub-category", metric_label],
+            "rows": [[row.sub_category, row.value] for row in table_rows],
+            "metric": metric,
+            "format": metric_format,
+        },
+    }
+
+    summary_lines = []
+    for kpi in kpis:
+        digits = 0 if kpi["label"] == "Orders" else 2
+        delta = f"{kpi['delta_pct']:+.1f}%" if kpi["delta_pct"] is not None else "n/a"
+        summary_lines.append(
+            f"{kpi['label']}: {kpi['value']:.{digits}f} "
+            f"(previous period {prev_start} to {prev_end}: {kpi['prev_value']:.{digits}f}, {delta})"
+        )
+    summary = "\n".join(summary_lines) + (
+        "\n\nFull monthly trend, category/region breakdown, and top sub-categories "
+        f"— all by {metric_label.lower()} — are rendered in the report below."
+    )
+
+    return ToolResult(summary, chart=report)
 
 
 _PERIOD_SQL = {

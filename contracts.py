@@ -21,6 +21,21 @@ class ChartType(StrEnum):
     LINE = "line"
     BAR = "bar"
     COHORT_HEATMAP = "cohort_heatmap"
+    REPORT = "report"
+
+
+class MetricFormat(StrEnum):
+    """How a metric's raw numeric value should be displayed.
+
+    Lets the report's breakdown/table renderer in components.py format a
+    value correctly (money, a plain count, or a percentage) without knowing
+    which specific metric produced it — new metrics in
+    `database/queries.py::METRIC_FORMAT` don't require touching the renderer.
+    """
+
+    MONEY = "money"
+    COUNT = "count"
+    PERCENT = "percent"
 
 
 @dataclass

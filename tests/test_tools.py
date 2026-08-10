@@ -48,6 +48,65 @@ class TestRunTool:
         assert not result.is_error
         assert result.chart["chart_type"] == ChartType.BAR
 
+    def test_report_tool_returns_a_report_chart(self):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31",
+        })
+        assert not result.is_error
+        assert result.chart["chart_type"] == ChartType.REPORT
+        assert len(result.chart["kpis"]) == 3
+
+    def test_report_tool_metric_defaults_to_revenue(self):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31",
+        })
+        assert result.chart["trend"]["title"] == "Revenue by month"
+
+    def test_report_tool_accepts_an_explicit_metric(self):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31", "metric": "orders",
+        })
+        assert not result.is_error
+        assert result.chart["trend"]["title"] == "Orders by month"
+
+    def test_report_tool_invalid_metric_becomes_an_error_result(self):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31", "metric": "bogus",
+        })
+        assert result.is_error
+
+    def test_report_tool_accepts_the_derived_revenue_per_order_metric(self):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31", "metric": "revenue_per_order",
+        })
+        assert not result.is_error
+        assert result.chart["trend"]["title"] == "Revenue per order by month"
+
+    def test_chart_tool_accepts_the_derived_revenue_per_order_metric(self):
+        result = run_tool("get_chart_data", {
+            "metric": "revenue_per_order", "group_by": "month",
+            "start_date": "2024-01-01", "end_date": "2024-12-31",
+        })
+        assert not result.is_error
+        assert result.chart["chart_type"] == ChartType.LINE
+
+    @pytest.mark.parametrize("metric", ["quantity", "profit_margin", "discount_rate"])
+    def test_report_tool_accepts_each_new_derived_metric(self, metric):
+        result = run_tool("generate_report", {
+            "start_date": "2024-01-01", "end_date": "2024-12-31", "metric": metric,
+        })
+        assert not result.is_error
+        assert result.chart["breakdown"]["metric"] == metric
+
+    @pytest.mark.parametrize("metric", ["quantity", "profit_margin", "discount_rate"])
+    def test_chart_tool_accepts_each_new_derived_metric(self, metric):
+        result = run_tool("get_chart_data", {
+            "metric": metric, "group_by": "category",
+            "start_date": "2024-01-01", "end_date": "2024-12-31",
+        })
+        assert not result.is_error
+        assert result.chart["chart_type"] == ChartType.BAR
+
     def test_cohort_granularity_defaults_to_month(self):
         result = run_tool("get_cohort_retention", {
             "start_date": "2023-01-01", "end_date": "2023-06-30",
