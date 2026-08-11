@@ -24,7 +24,9 @@ CAPABILITIES = [
     "Remembers context within a chat session, and answers in whatever language you ask in",
 ]
 
-ROADMAP: list[str] = []
+ROADMAP: list[str] = [
+    "Semantic retrieval layer for the database schema (RAG over schema)",
+]
 
 # Endpoints of matplotlib's "Blues" colormap, approximated so the cohort table
 # doesn't pull in matplotlib as a dependency.

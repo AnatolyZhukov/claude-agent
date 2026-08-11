@@ -11,7 +11,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 - `contracts.py` — `ToolResult` and the `ChartType` enum: the shapes shared between the tool layer and the UI.
 - `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
-- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the self-contained HTML dashboard report (KPI cards, inline-SVG trend, category/region breakdown, detail table), the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it — currently there isn't).
+- `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the self-contained HTML dashboard report (KPI cards, inline-SVG trend, category/region breakdown, detail table), the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it).
 - `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
 - `dbt_schema.py` + `dbt_demo/` — generates the system prompt's schema section from a dbt-style `sources.yml` instead of a hand-written string. See [dbt-as-schema-documentation demo](#dbt-as-schema-documentation-demo) below.
 - `static/style.css` — CSS for the Streamlit UI (table borders/padding, centered title).
