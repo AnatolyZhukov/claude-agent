@@ -80,11 +80,29 @@ Only needed if you have a newer export of the dataset.
 
 ## How it works
 
-- The agent has six tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by month/region/category/sub-category (rendered as a chart in the Streamlit UI), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), `generate_report` for a dashboard-style HTML report (see [Dashboard report](#dashboard-report) below), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
+- The agent has six tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by a dimension (rendered as a chart in the Streamlit UI — see [Metrics & dimensions](#metrics--dimensions) below), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), `generate_report` for a dashboard-style HTML report (see [Dashboard report](#dashboard-report) below), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
 - Raw `query_database` results are capped at 200 rows, and a capped result says so explicitly in the text handed to the model — a silently truncated result would otherwise be reported as if it were complete.
 - When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself (the vetting logic lives in `code_execution_guard.py`), instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
+
+## Metrics & dimensions
+
+`get_chart_data` and `generate_report` share one catalog, defined in `database/queries.py` as three parallel dicts — `METRIC_SQL` (the aggregate expression), `_METRIC_LABELS` (its display name), and `METRIC_FORMAT` (how to render its value). Adding a metric is an entry in each; nothing in the UI layer changes.
+
+| Metric | Meaning | Rendered as |
+| --- | --- | --- |
+| `revenue`, `profit`, `quantity`, `returned_revenue` | `SUM(sales)`, `SUM(profit)`, units sold, and sales belonging to orders that were later returned | money / count |
+| `orders` | `COUNT(DISTINCT order_id)` — non-additive across periods | count |
+| `revenue_per_order` | revenue ÷ orders (average order value) | money |
+| `profit_margin`, `discount_rate`, `return_rate` | profit ÷ revenue, the average discount, and the share of orders that were returned | percent |
+| `delivery_days` | average calendar days from `order_date` to `ship_date` | days |
+
+The returns metrics read the `returns` table through an `IN (SELECT order_id FROM returns)` subquery rather than a join, so every metric stays a bare aggregate over `FROM orders` — the only shape the callers know how to build.
+
+Dimensions (`GROUP_BY_SQL`) are the time buckets `day`/`week`/`month`/`quarter`/`year`, which render as a trend line, plus `region`, `state`, `category`, `sub_category`, `segment`, and `ship_mode`, which render as bars. The time buckets are the same `_PERIOD_SQL` expressions the cohort tool uses, so a quarter means exactly the same thing in a chart as in a cohort table. Both whitelists are mirrored in the tool schemas' `enum`s, and a test asserts the two stay in step — a value the model can send but the SQL layer can't build would be a `KeyError` waiting to happen.
+
+Since a fine-grained bucket over a wide range can produce thousands of rows, `get_chart_data` caps the *text* it hands the model at 200 groups (with an explicit truncation note) while the chart itself keeps the full series.
 
 ## Chat history & feedback
 
@@ -94,7 +112,7 @@ Ratings live in their own append-only table rather than a `rating` column update
 
 ## Dashboard report
 
-Asking for a "dashboard" or "summary report" for a period (optionally filtered by region/category) calls `generate_report`, which computes revenue/profit/orders KPIs against the immediately preceding period of the same length (Tableau's "vs PM/PY" pattern), plus a monthly trend, a category × region breakdown, and a top-5 sub-categories table — all in one query round-trip per section, no new ORM logic. An optional `metric` argument (defaults to `revenue`; same catalog `get_chart_data` draws from) rebuilds those three sections around a different measure — plain aggregates `profit`, `orders`, `quantity` (units sold), or derived ratios `revenue_per_order` (a.k.a. average order value), `profit_margin`, `discount_rate` — while the KPI row always shows revenue/profit/orders regardless of that choice, same as the Tableau reference dashboards this was modeled on. Each metric in `database/queries.py::METRIC_FORMAT` declares how its value should render (money/count/percent) via the shared `MetricFormat` enum in `contracts.py`, so `components.py`'s renderer formats correctly without knowing the metric's name — adding another metric later is a two-line change (`METRIC_SQL` + `METRIC_FORMAT`), not a new formatting branch. `components.py::build_report_html` turns the structured payload into a single self-contained HTML document (inline `<style>`, hand-rolled inline-SVG line chart, no charting library or external assets), shown in the chat via `st.iframe` and offered as a `.html` download via `st.download_button`.
+Asking for a "dashboard" or "summary report" for a period (optionally filtered by region/category) calls `generate_report`, which computes revenue/profit/orders KPIs against the immediately preceding period of the same length (Tableau's "vs PM/PY" pattern), plus a monthly trend, a category × region breakdown, and a top-5 sub-categories table — all in one query round-trip per section, no new ORM logic. An optional `metric` argument (defaults to `revenue`; the same catalog `get_chart_data` draws from — see [Metrics & dimensions](#metrics--dimensions)) rebuilds those three sections around a different measure, while the KPI row always shows revenue/profit/orders regardless of that choice, same as the Tableau reference dashboards this was modeled on. Each metric in `database/queries.py::METRIC_FORMAT` declares how its value should render (money/count/percent/days) via the shared `MetricFormat` enum in `contracts.py`, so `components.py`'s renderer formats correctly without knowing the metric's name — adding another metric later is a two-line change (`METRIC_SQL` + `METRIC_FORMAT`), not a new formatting branch. `components.py::build_report_html` turns the structured payload into a single self-contained HTML document (inline `<style>`, hand-rolled inline-SVG line chart, no charting library or external assets), shown in the chat via `st.iframe` and offered as a `.html` download via `st.download_button`.
 
 There's deliberately no PDF export: it would need either a pure-Python renderer with weak SVG/CSS support (`xhtml2pdf`) or one needing system libraries that complicate deploying to Streamlit Community Cloud (`weasyprint`). The downloaded HTML file can always be printed to PDF through the browser's own print dialog if needed, at zero cost to this project.
 
@@ -106,7 +124,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-149 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+188 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

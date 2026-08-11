@@ -124,6 +124,64 @@ def get_active_users(start_date: str, end_date: str) -> ToolResult:
     return ToolResult(f"Distinct customers with at least one order in range: {count}")
 
 
+# Time-bucket expressions, shared by the chart/report dimensions below and by
+# the cohort tool at the bottom of this module. `{0}` is the date column the
+# bucket is computed from, so the same definition works for a chart grouping
+# (order_date) and for a cohort's first-order date.
+_PERIOD_SQL = {
+    "day": {
+        "period": "date({0})",
+        # Julian day number is already a single increasing integer, so
+        # subtracting two of these directly gives the number of days between
+        # them.
+        "index": "CAST(julianday({0}) AS INTEGER)",
+        "label": "Day",
+        "adverb": "Daily",
+    },
+    "week": {
+        # Monday of the week containing {0}: shift forward to the next Sunday
+        # (or stay put if already Sunday), then back 6 days.
+        "period": "date({0}, 'weekday 0', '-6 days')",
+        # Weeks are always exactly 7 days apart once aligned to Monday, so
+        # dividing the Julian day number by 7 gives an increasing integer
+        # (SQLite integer/integer division truncates, which is exact here).
+        "index": "(CAST(julianday({0}) AS INTEGER) / 7)",
+        "label": "Week",
+        "adverb": "Weekly",
+    },
+    "month": {
+        "period": "strftime('%Y-%m', {0})",
+        # (year*12 + month) as a single increasing integer, so subtracting two
+        # of these directly gives the number of months between them.
+        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 12 + CAST(substr({0}, 6, 2) AS INTEGER))",
+        "label": "Month",
+        "adverb": "Monthly",
+    },
+    "quarter": {
+        "period": "(strftime('%Y', {0}) || '-Q' || ((CAST(strftime('%m', {0}) AS INTEGER) - 1) / 3 + 1))",
+        # Same idea as month, but (year*4 + quarter) — quarter digit is the
+        # single character right after the literal "-Q" in e.g. "2023-Q1".
+        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 4 + CAST(substr({0}, 7, 1) AS INTEGER))",
+        "label": "Quarter",
+        "adverb": "Quarterly",
+    },
+    "year": {
+        "period": "strftime('%Y', {0})",
+        "index": "CAST({0} AS INTEGER)",
+        "label": "Year",
+        "adverb": "Yearly",
+    },
+}
+
+# An order counts as returned if its order_id appears in the `returns` table at
+# all — that table has no "not returned" rows (see dbt_demo/.../sources.yml).
+# Written as an IN (subquery) rather than a LEFT JOIN so every metric here
+# stays a bare aggregate expression over `FROM orders`, which is all the
+# callers below know how to build. (A join would also be correct — returns has
+# exactly one row per order_id, so it wouldn't fan out — but it would force
+# every other metric to qualify its column names.)
+_IS_RETURNED = "order_id IN (SELECT order_id FROM returns)"
+
 METRIC_SQL = {
     "revenue": "SUM(sales)",
     "profit": "SUM(profit)",
@@ -140,12 +198,37 @@ METRIC_SQL = {
     # AVG needs no such reasoning — SQLite's AVG is itself a safe aggregate
     # (NULL only over an empty group, and groups here are never empty).
     "discount_rate": "AVG(discount)",
+    # Returns and fulfillment — the parts of the dataset (the `returns` table
+    # and the ship_date column) none of the metrics above touch.
+    "return_rate": (f"COUNT(DISTINCT CASE WHEN {_IS_RETURNED} THEN order_id END) "
+                    "* 1.0 / COUNT(DISTINCT order_id)"),
+    "returned_revenue": f"SUM(CASE WHEN {_IS_RETURNED} THEN sales ELSE 0 END)",
+    # Calendar days between the order and its shipment. julianday() on the
+    # date-only value keeps this a whole number of days, the same way the
+    # cohort tool's day index does.
+    "delivery_days": "AVG(julianday(date(ship_date)) - julianday(date(order_date)))",
 }
+
+# Dimensions a metric can be broken down by. Time buckets reuse _PERIOD_SQL so
+# "quarter" means exactly the same thing in a chart as in a cohort table; the
+# rest are plain columns, whitelisted here rather than taken from the model.
 GROUP_BY_SQL = {
-    "month": "strftime('%Y-%m', order_date)",
+    **{name: period["period"].format("order_date") for name, period in _PERIOD_SQL.items()},
     "region": "region",
+    "state": "state_province",
     "category": "category",
     "sub_category": "sub_category",
+    "segment": "segment",
+    "ship_mode": "ship_mode",
+}
+
+# Display name for each dimension, for chart titles — same reason as
+# _METRIC_LABELS below: without it the raw whitelist key leaks into user-facing
+# text as "revenue by sub_category" / "by ship_mode".
+_GROUP_BY_LABELS = {
+    "day": "day", "week": "week", "month": "month", "quarter": "quarter", "year": "year",
+    "region": "region", "state": "state", "category": "category",
+    "sub_category": "sub-category", "segment": "segment", "ship_mode": "ship mode",
 }
 
 # Display name for each metric — used both for report titles/columns and
@@ -154,7 +237,8 @@ GROUP_BY_SQL = {
 _METRIC_LABELS = {
     "revenue": "Revenue", "profit": "Profit", "orders": "Orders", "quantity": "Quantity",
     "revenue_per_order": "Revenue per order", "profit_margin": "Profit margin",
-    "discount_rate": "Discount rate",
+    "discount_rate": "Discount rate", "return_rate": "Return rate",
+    "returned_revenue": "Returned revenue", "delivery_days": "Delivery days",
 }
 
 # How each metric's raw numeric value should be displayed — read by
@@ -166,6 +250,8 @@ METRIC_FORMAT = {
     "orders": MetricFormat.COUNT, "quantity": MetricFormat.COUNT,
     "revenue_per_order": MetricFormat.MONEY,
     "profit_margin": MetricFormat.PERCENT, "discount_rate": MetricFormat.PERCENT,
+    "return_rate": MetricFormat.PERCENT, "returned_revenue": MetricFormat.MONEY,
+    "delivery_days": MetricFormat.DAYS,
 }
 
 
@@ -195,18 +281,29 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
     # read by name rather than by position.
     data: dict = {row.label: row.value for row in rows}
 
-    title = f"{_METRIC_LABELS[metric].lower()} by {group_by}"
+    title = f"{_METRIC_LABELS[metric].lower()} by {_GROUP_BY_LABELS[group_by]}"
     if region:
         title += f" ({region})"
     if category:
         title += f" ({category})"
     chart = {
         "title": title,
-        "chart_type": ChartType.LINE if group_by == "month" else ChartType.BAR,
+        # Time buckets are a series (a trend to follow); every other dimension
+        # is a set of independent categories to compare side by side.
+        "chart_type": ChartType.LINE if group_by in _PERIOD_SQL else ChartType.BAR,
         "data": data,
     }
 
-    summary = "\n".join(f"{label}: {value}" for label, value in data.items())
+    # The chart keeps the full series either way; only the text handed to the
+    # model is capped, since a wide range grouped by day or week is thousands
+    # of tokens of numbers it doesn't need to describe the trend.
+    lines = [f"{label}: {value}" for label, value in data.items()]
+    summary = "\n".join(lines[:MAX_ROWS])
+    if len(lines) > MAX_ROWS:
+        summary += (f"\n\n[Truncated: {len(lines)} groups in total, only the first {MAX_ROWS} "
+                    "are listed. The chart shown to the user has the complete series — "
+                    "summarize the trend rather than restating values, and re-query with a "
+                    "coarser group_by or a narrower date range if a specific group is needed.]")
     return ToolResult(summary or "No data.", chart=chart)
 
 
@@ -359,51 +456,6 @@ def get_report_data(start_date: str, end_date: str, region: str | None = None,
 
     return ToolResult(summary, chart=report)
 
-
-_PERIOD_SQL = {
-    "day": {
-        "period": "date({0})",
-        # Julian day number is already a single increasing integer, so
-        # subtracting two of these directly gives the number of days between
-        # them.
-        "index": "CAST(julianday({0}) AS INTEGER)",
-        "label": "Day",
-        "adverb": "Daily",
-    },
-    "week": {
-        # Monday of the week containing {0}: shift forward to the next Sunday
-        # (or stay put if already Sunday), then back 6 days.
-        "period": "date({0}, 'weekday 0', '-6 days')",
-        # Weeks are always exactly 7 days apart once aligned to Monday, so
-        # dividing the Julian day number by 7 gives an increasing integer
-        # (SQLite integer/integer division truncates, which is exact here).
-        "index": "(CAST(julianday({0}) AS INTEGER) / 7)",
-        "label": "Week",
-        "adverb": "Weekly",
-    },
-    "month": {
-        "period": "strftime('%Y-%m', {0})",
-        # (year*12 + month) as a single increasing integer, so subtracting two
-        # of these directly gives the number of months between them.
-        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 12 + CAST(substr({0}, 6, 2) AS INTEGER))",
-        "label": "Month",
-        "adverb": "Monthly",
-    },
-    "quarter": {
-        "period": "(strftime('%Y', {0}) || '-Q' || ((CAST(strftime('%m', {0}) AS INTEGER) - 1) / 3 + 1))",
-        # Same idea as month, but (year*4 + quarter) — quarter digit is the
-        # single character right after the literal "-Q" in e.g. "2023-Q1".
-        "index": "(CAST(substr({0}, 1, 4) AS INTEGER) * 4 + CAST(substr({0}, 7, 1) AS INTEGER))",
-        "label": "Quarter",
-        "adverb": "Quarterly",
-    },
-    "year": {
-        "period": "strftime('%Y', {0})",
-        "index": "CAST({0} AS INTEGER)",
-        "label": "Year",
-        "adverb": "Yearly",
-    },
-}
 
 _RETENTION_SQL = """
     WITH first_orders AS (
