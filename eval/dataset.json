@@ -75,7 +75,8 @@
     "question": "What is the average order value (average total sales per order)?",
     "expected_tool": "query_database",
     "expected": {"type": "numeric", "value": 457.39, "tolerance": 0.01},
-    "tags": ["benchmark", "medium"]
+    "tags": ["benchmark", "medium", "known-issue"],
+    "notes": "Discovered issue (2026-08-11): this question asks for a single ungrouped average, but get_chart_data structurally requires a group_by, so the model sometimes picks get_chart_data(metric=revenue_per_order, group_by=year) instead of query_database and gets a per-year breakdown rather than one number -- then computes an overall figure itself in prose, which isn't guaranteed correct (unweighted average of yearly averages != the true order-weighted overall average), echoing the model-arithmetic issue already noted in the project checklist. Intermittent -- the model doesn't reliably pick the same tool for this question across runs, so this case flips between PASS and FAIL."
   },
   {
     "id": "bench_pct_discount_over_20",
@@ -118,9 +119,10 @@
   {
     "id": "bench_top_region_margin",
     "question": "Which region has the highest profit margin?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "top_entity", "label": "West", "value": [0.1460, 14.60], "tolerance": 0.05},
-    "tags": ["benchmark", "medium"]
+    "tags": ["benchmark", "medium"],
+    "notes": "get_chart_data(metric=profit_margin, group_by=region) answers this equally well as raw SQL since the profit_margin metric was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_top_discount_negative_subcat",
@@ -133,9 +135,10 @@
   {
     "id": "bench_orders_per_ship_mode",
     "question": "How many unique orders are there for each ship mode?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "list_contains", "items": ["Standard Class", "Second Class", "First Class", "Same Day"]},
-    "tags": ["benchmark", "easy"]
+    "tags": ["benchmark", "easy"],
+    "notes": "get_chart_data(metric=orders, group_by=ship_mode) answers this equally well as raw SQL since the ship_mode dimension was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_sales_by_region",
@@ -175,16 +178,18 @@
   {
     "id": "bench_avg_discount_by_category",
     "question": "What is the average discount for each category?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "list_contains", "items": ["Furniture", "Office Supplies", "Technology"]},
-    "tags": ["benchmark", "easy-medium"]
+    "tags": ["benchmark", "easy-medium"],
+    "notes": "get_chart_data(metric=discount_rate, group_by=category) answers this equally well as raw SQL since the discount_rate metric was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_units_by_region",
     "question": "How many units were sold in each region?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "list_contains", "items": ["Central", "East", "South", "West"]},
-    "tags": ["benchmark", "easy-medium"]
+    "tags": ["benchmark", "easy-medium"],
+    "notes": "get_chart_data(metric=quantity, group_by=region) answers this equally well as raw SQL since the quantity metric was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_negative_profit_subcats",
@@ -196,16 +201,18 @@
   {
     "id": "bench_profit_by_segment",
     "question": "What is the total profit for each customer segment?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "list_contains", "items": ["Consumer", "Corporate", "Home Office"]},
-    "tags": ["benchmark", "easy-medium"]
+    "tags": ["benchmark", "easy-medium"],
+    "notes": "get_chart_data(metric=profit, group_by=segment) answers this equally well as raw SQL since the segment dimension was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_margin_by_category",
     "question": "What is the profit margin for each category?",
-    "expected_tool": "query_database",
+    "expected_tool": ["query_database", "get_chart_data"],
     "expected": {"type": "list_contains", "items": ["Office Supplies", "Technology", "Furniture"]},
-    "tags": ["benchmark", "medium"]
+    "tags": ["benchmark", "medium"],
+    "notes": "get_chart_data(metric=profit_margin, group_by=category) answers this equally well as raw SQL since the profit_margin metric was added -- observed the model pick either one across runs at temperature=0.2."
   },
   {
     "id": "bench_products_over_10k",

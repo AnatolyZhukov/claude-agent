@@ -73,11 +73,11 @@ Not all 50 made the cut — questions whose correct answer is a large,
 unbounded row set (e.g. "list all 306 products with negative profit") aren't
 realistically askable as a single chat question, so those were skipped.
 
-Two real behavior issues were found and deliberately kept as cases tagged
-`"known-issue"` rather than adjusted to match current output. Both are
-**intermittent** — the model doesn't reliably write the same SQL for these
-two questions across runs at `temperature=0.2`, so expect these two to flip
-between PASS and FAIL from run to run:
+Three real behavior issues were found and deliberately kept as cases tagged
+`"known-issue"` rather than adjusted to match current output. All three are
+**intermittent** — the model doesn't reliably pick the same tool or write the
+same SQL for these questions across runs at `temperature=0.2`, so expect
+these to flip between PASS and FAIL from run to run:
 
 - `bench_top10_sales_negative_profit` — "top 10 by sales but negative
   profit" should mean the intersection of {overall top-10 by sales} and
@@ -90,6 +90,14 @@ between PASS and FAIL from run to run:
   `COUNT(DISTINCT order_id WHERE discount > 0.20) / COUNT(DISTINCT order_id)`
   (20.43%). The model sometimes instead divides a row-count of qualifying
   line items by the distinct-order count (28.18%), mixing granularities.
+- `bench_avg_order_value` — "average order value" asks for a single
+  ungrouped average, but `get_chart_data` structurally requires a
+  `group_by`. The model sometimes picks
+  `get_chart_data(metric=revenue_per_order, group_by=year)` instead of
+  `query_database`, gets a per-year breakdown instead of one number, then
+  computes an overall figure itself in prose — an unweighted average of
+  yearly averages, which isn't guaranteed to match the true order-weighted
+  overall average.
 
 ## Reading the summary
 
