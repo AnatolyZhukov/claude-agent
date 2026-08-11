@@ -36,6 +36,7 @@ class MetricFormat(StrEnum):
     MONEY = "money"
     COUNT = "count"
     PERCENT = "percent"
+    DAYS = "days"
 
 
 @dataclass

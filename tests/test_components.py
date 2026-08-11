@@ -73,6 +73,10 @@ class TestFormatMetricValue:
         assert _format_metric_value(0.153, MetricFormat.PERCENT, 0) == "15.3%"
         assert _format_metric_value(0.153, MetricFormat.PERCENT, 2) == "15.3%"
 
+    def test_days_carry_their_unit_and_ignore_digits(self):
+        assert _format_metric_value(3.98, MetricFormat.DAYS, 0) == "4.0 days"
+        assert _format_metric_value(3.98, MetricFormat.DAYS, 2) == "4.0 days"
+
 
 class TestBreakdownTableHtml:
     def test_empty_breakdown_is_a_placeholder(self):

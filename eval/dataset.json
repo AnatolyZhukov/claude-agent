@@ -289,5 +289,42 @@
       "items": ["Tamara Chand", "Raymond Buch", "Sanjit Chand", "Adrian Barton"]
     },
     "tags": ["benchmark", "hard"]
+  },
+  {
+    "id": "return_rate_by_category_2024",
+    "question": "What was the return rate by product category in 2024?",
+    "expected_tool": ["get_chart_data", "query_database"],
+    "expected": {
+      "type": "top_entity",
+      "label": "Technology",
+      "value": [0.0853, 8.53],
+      "tolerance": 0.01
+    },
+    "tags": ["returns", "dimensions"],
+    "notes": "Exercises the return_rate metric (the returns table). Accepts the rate either as a fraction or as a percentage: get_chart_data returns the raw fraction, while a hand-written query_database SQL may multiply by 100."
+  },
+  {
+    "id": "delivery_days_by_ship_mode_2024",
+    "question": "Which shipping mode was fastest on average in 2024, and how many days did it take?",
+    "expected_tool": ["get_chart_data", "query_database"],
+    "expected": {"type": "top_entity", "label": "Same Day", "value": 0.037, "tolerance": 0.01},
+    "tags": ["delivery", "dimensions"],
+    "notes": "Exercises the delivery_days metric (ship_date - order_date) crossed with the ship_mode dimension."
+  },
+  {
+    "id": "revenue_by_segment_2024",
+    "question": "Show me revenue by customer segment for 2024.",
+    "expected_tool": "get_chart_data",
+    "expected": {"type": "chart_total", "value": 472993.031, "tolerance": 0.01},
+    "tags": ["dimensions"],
+    "notes": "Segment partitions the period, so the chart has to add up to the same total as revenue for all of 2024."
+  },
+  {
+    "id": "revenue_by_quarter_2024",
+    "question": "Show me revenue by quarter for 2024.",
+    "expected_tool": ["get_chart_data", "query_database"],
+    "expected": {"type": "numeric", "value": 182912.25, "tolerance": 0.01},
+    "tags": ["dimensions"],
+    "notes": "Q4 2024 — checks the quarter time bucket covers the same rows as the month/year buckets."
   }
 ]

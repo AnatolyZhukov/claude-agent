@@ -14,7 +14,9 @@ CAPABILITIES = [
     "Revenue & profit totals for any date range, filterable by region/category",
     "Active users (unique customers) for a period",
     "Charts of revenue, profit, orders, quantity, revenue per order, profit margin, "
-    "or discount rate by month, region, category, or sub-category",
+    "discount rate, return rate, returned revenue, or delivery time — broken down "
+    "by day/week/month/quarter/year, or by region, state, category, sub-category, "
+    "segment, or shipping mode",
     "Cohort retention analysis (day/week/month/quarter/year) with a heatmap table",
     "Dashboard-style HTML report (KPIs vs. previous period, trend, category/region "
     "breakdown, top sub-categories — for any of the metrics above), downloadable "
@@ -184,6 +186,10 @@ def _format_metric_value(value: float, fmt: str, digits: int) -> str:
         # Always one decimal regardless of `digits` — the money formats' 0
         # (grid) vs. 2 (table) precision split doesn't carry meaning here.
         return f"{value * 100:,.1f}%"
+    if fmt == MetricFormat.DAYS:
+        # Same reasoning as PERCENT: a fixed decimal, plus the unit, since
+        # "4.0" alone doesn't read as a duration in a bare grid cell.
+        return f"{value:,.1f} days"
     return f"${value:,.{digits}f}"
 
 

@@ -1,11 +1,14 @@
 """Tests for the query layer: SQL guards, filters, and results against the
 real (read-only) sample_superstore database.
 """
+from datetime import date
+
 import pytest
 
 from contracts import ChartType, MetricFormat
 from database.engine import MAX_ROWS
 from database.queries import (
+    METRIC_FORMAT,
     _apply_filters,
     _delta_pct,
     _previous_period,
@@ -197,6 +200,136 @@ class TestChartData:
         result = get_chart_data("revenue", "month", "1990-01-01", "1990-12-31")
         assert result.content == "No data."
         assert result.chart["data"] == {}
+
+
+def _scalar(sql: str) -> float:
+    """The value of a one-row, one-column SELECT, read straight from the
+    database.
+
+    An independent baseline for the metrics whose definition can't be
+    cross-checked against another tool (the ones reading `returns`/ship_date),
+    the same way the derived-metric tests above check against the metrics they
+    are built from.
+    """
+    return float(run_select(sql).content.splitlines()[1])
+
+
+# Every row of 2024, used by both classes below so the SQL baselines and the
+# tool calls are demonstrably scoped to the same period.
+_YEAR = ("2024-01-01", "2024-12-31")
+_YEAR_WHERE = "date(order_date) BETWEEN '2024-01-01' AND '2024-12-31'"
+
+
+class TestChartDimensions:
+    @pytest.mark.parametrize("group_by", ["day", "week", "month", "quarter", "year"])
+    def test_time_buckets_render_as_a_trend_line(self, group_by):
+        result = get_chart_data("revenue", group_by, *_YEAR)
+        assert result.chart["chart_type"] == ChartType.LINE
+
+    @pytest.mark.parametrize("group_by",
+                             ["region", "state", "category", "sub_category",
+                              "segment", "ship_mode"])
+    def test_other_dimensions_render_as_bars(self, group_by):
+        result = get_chart_data("revenue", group_by, *_YEAR)
+        assert result.chart["chart_type"] == ChartType.BAR
+        assert result.chart["data"]
+
+    def test_quarters_are_labeled_and_add_up_to_the_year(self):
+        quarters = get_chart_data("revenue", "quarter", *_YEAR).chart["data"]
+        year = get_chart_data("revenue", "year", *_YEAR).chart["data"]
+        assert list(quarters) == ["2024-Q1", "2024-Q2", "2024-Q3", "2024-Q4"]
+        assert sum(quarters.values()) == pytest.approx(year["2024"])
+
+    def test_weeks_are_labeled_by_their_monday(self):
+        weeks = get_chart_data("revenue", "week", *_YEAR).chart["data"]
+        assert all(date.fromisoformat(label).weekday() == 0 for label in weeks)
+
+    def test_every_dimension_partitions_the_same_period(self):
+        # Different cuts of one period must sum to the same total — this is
+        # what catches a dimension whose SQL silently drops rows (e.g. a NULL
+        # column or a join that doesn't match every order line).
+        totals = {
+            group_by: sum(get_chart_data("revenue", group_by, *_YEAR).chart["data"].values())
+            for group_by in ("month", "region", "state", "segment", "ship_mode")
+        }
+        assert len({round(t, 4) for t in totals.values()}) == 1, totals
+
+    def test_state_reads_the_state_province_column(self):
+        states = get_chart_data("revenue", "state", *_YEAR).chart["data"]
+        assert "California" in states
+
+    def test_ship_mode_covers_the_four_shipping_classes(self):
+        modes = get_chart_data("revenue", "ship_mode", *_YEAR).chart["data"]
+        assert set(modes) == {"Standard Class", "Second Class", "First Class", "Same Day"}
+
+    @pytest.mark.parametrize("group_by, expected", [
+        ("sub_category", "revenue by sub-category"),
+        ("ship_mode", "revenue by ship mode"),
+    ])
+    def test_title_uses_the_dimension_label_not_the_raw_key(self, group_by, expected):
+        assert get_chart_data("revenue", group_by, *_YEAR).chart["title"] == expected
+
+    def test_invalid_group_by_raises_for_run_tool_to_catch(self):
+        with pytest.raises(KeyError):
+            get_chart_data("revenue", "customer_name", *_YEAR)
+
+    def test_a_wide_daily_range_truncates_the_text_but_not_the_chart(self):
+        result = get_chart_data("revenue", "day", "2023-01-01", "2026-08-08")
+        assert len(result.chart["data"]) > MAX_ROWS
+        assert "[Truncated:" in result.content
+        # One line per listed group, plus the blank line and the note.
+        assert len(result.content.splitlines()) == MAX_ROWS + 2
+
+
+class TestReturnsAndDeliveryMetrics:
+    def test_return_rate_matches_the_returns_table(self):
+        rate = get_chart_data("return_rate", "category", *_YEAR).chart["data"]["Technology"]
+        returned = _scalar(
+            "SELECT COUNT(DISTINCT order_id) FROM orders "
+            f"WHERE {_YEAR_WHERE} AND category = 'Technology' "
+            "AND order_id IN (SELECT order_id FROM returns)"
+        )
+        total = _scalar("SELECT COUNT(DISTINCT order_id) FROM orders "
+                        f"WHERE {_YEAR_WHERE} AND category = 'Technology'")
+        assert rate == pytest.approx(returned / total)
+
+    def test_return_rate_is_a_fraction_not_a_percentage(self):
+        rates = get_chart_data("return_rate", "region", *_YEAR).chart["data"]
+        assert all(0 < v < 1 for v in rates.values())
+        assert METRIC_FORMAT["return_rate"] == MetricFormat.PERCENT
+
+    def test_returned_revenue_is_a_subset_of_revenue(self):
+        returned = get_chart_data("returned_revenue", "category", *_YEAR).chart["data"]
+        revenue = get_chart_data("revenue", "category", *_YEAR).chart["data"]
+        assert all(0 < returned[c] < revenue[c] for c in revenue)
+        assert METRIC_FORMAT["returned_revenue"] == MetricFormat.MONEY
+
+    def test_returned_revenue_matches_the_returns_table(self):
+        returned = get_chart_data("returned_revenue", "category", *_YEAR).chart["data"]
+        expected = _scalar(
+            f"SELECT SUM(sales) FROM orders WHERE {_YEAR_WHERE} "
+            "AND category = 'Furniture' AND order_id IN (SELECT order_id FROM returns)"
+        )
+        assert returned["Furniture"] == pytest.approx(expected)
+
+    def test_delivery_days_is_the_gap_between_order_and_ship_date(self):
+        days = get_chart_data("delivery_days", "category", *_YEAR).chart["data"]
+        expected = _scalar(
+            "SELECT AVG(julianday(date(ship_date)) - julianday(date(order_date))) "
+            f"FROM orders WHERE {_YEAR_WHERE} AND category = 'Technology'"
+        )
+        assert days["Technology"] == pytest.approx(expected)
+        # A shipping delay, not a dollar amount or a fraction.
+        assert all(0 < v < 14 for v in days.values())
+        assert METRIC_FORMAT["delivery_days"] == MetricFormat.DAYS
+
+    def test_ship_mode_ranks_by_delivery_speed(self):
+        # The end-to-end sanity check on both additions at once: the new
+        # ship_mode dimension crossed with the new delivery_days metric has to
+        # reproduce what the shipping classes literally mean.
+        days = get_chart_data("delivery_days", "ship_mode", *_YEAR).chart["data"]
+        assert (days["Same Day"] < days["First Class"] < days["Second Class"]
+                < days["Standard Class"])
 
 
 class TestPreviousPeriod:

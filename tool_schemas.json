@@ -35,13 +35,13 @@
       "properties": {
         "metric": {
           "type": "string",
-          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate"],
-          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id), quantity = SUM(quantity) (units sold). Derived (ratio) metrics, not summable totals: revenue_per_order = revenue / orders (a.k.a. average order value / AOV), profit_margin = profit / revenue (a fraction, e.g. 0.15 for 15%), discount_rate = average discount applied (a fraction)."
+          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
+          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id), quantity = SUM(quantity) (units sold), returned_revenue = sales belonging to orders that were later returned. Derived (ratio) metrics, not summable totals: revenue_per_order = revenue / orders (a.k.a. average order value / AOV), profit_margin = profit / revenue (a fraction, e.g. 0.15 for 15%), discount_rate = average discount applied (a fraction), return_rate = share of orders that were returned (a fraction), delivery_days = average calendar days from order_date to ship_date (use this for any question about shipping/delivery/fulfillment speed)."
         },
         "group_by": {
           "type": "string",
-          "enum": ["month", "region", "category", "sub_category"],
-          "description": "Dimension to break the metric down by."
+          "enum": ["day", "week", "month", "quarter", "year", "region", "state", "category", "sub_category", "segment", "ship_mode"],
+          "description": "Dimension to break the metric down by. day/week/month/quarter/year are time buckets on order_date and render as a trend line (week is labeled by its Monday); region, state (US state/province), category, sub_category, segment (Consumer/Corporate/Home Office), and ship_mode (Standard Class/Second Class/First Class/Same Day) render as a bar chart. Pick the coarsest time bucket that answers the question — group_by=day over a multi-year range returns hundreds of points."
         },
         "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
         "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
@@ -75,8 +75,8 @@
         "category": {"type": "string", "description": "Optional exact category name to filter by"},
         "metric": {
           "type": "string",
-          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate"],
-          "description": "Which metric drives the monthly trend, category/region breakdown, and top sub-categories table. Defaults to revenue. Options: revenue, profit, orders, quantity (units sold), revenue_per_order (a.k.a. average order value / AOV), profit_margin (profit as a % of revenue), discount_rate (average discount applied, as a %). Use this to rebuild the dashboard around a different metric — e.g. metric=orders for order volume, or metric=profit_margin when the user asks about margins rather than totals. The KPI row itself always shows revenue, profit, and orders together no matter what's picked here."
+          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
+          "description": "Which metric drives the monthly trend, category/region breakdown, and top sub-categories table. Defaults to revenue. Options: revenue, profit, orders, quantity (units sold), revenue_per_order (a.k.a. average order value / AOV), profit_margin (profit as a % of revenue), discount_rate (average discount applied, as a %), return_rate (share of orders returned, as a %), returned_revenue (sales in orders that were returned), delivery_days (average days from order to shipment). Use this to rebuild the dashboard around a different metric — e.g. metric=orders for order volume, or metric=profit_margin when the user asks about margins rather than totals. The KPI row itself always shows revenue, profit, and orders together no matter what's picked here."
         }
       },
       "required": ["start_date", "end_date"]
