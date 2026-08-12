@@ -52,6 +52,15 @@ TIMEOUT_MESSAGE = (
     "answered via a direct database query (e.g. a specific metric, date range, "
     "or breakdown)."
 )
+CODE_EXECUTION_RECOVERY = (
+    "The code_execution tool is not available for this and its output can't be "
+    "used. You don't need it: the database tools above have already returned "
+    "the figures, and the app renders the charts, tables and heatmaps for the "
+    "user by itself from those same results — you never have to draw or export "
+    "anything. Write the final answer now from the tool results you already "
+    "have, in prose: summarize what they show instead of listing the rows back, "
+    "and don't mention this message."
+)
 UNSAFE_CODE_EXECUTION_MESSAGE = (
     "I can't answer this — it led me to use a tool that has no access to the "
     "real sample_superstore data, so I won't report numbers I can't verify. "
@@ -315,6 +324,19 @@ def execute_tool_calls(response: Any) -> ToolCallBatch:
     return batch
 
 
+def _text_only(content_blocks: list[Any]) -> list[dict] | str:
+    """The text blocks of a response, as plain message content.
+
+    Used to replay a turn that also contained code_execution blocks. Those are
+    executed server-side and come back paired with their own result blocks;
+    sending them back up would mean re-submitting a tool exchange this app
+    never ran, so only what the model actually said is kept. Falls back to a
+    placeholder because message content can't be empty.
+    """
+    texts = [b.text for b in content_blocks if b.type == "text" and b.text.strip()]
+    return [{"type": "text", "text": t} for t in texts] or "(thinking)"
+
+
 def ask(question: str, history: list[dict] | None = None,
         log_history: bool = True) -> AskResult:
     """Answers `question`, driving the tool-use loop, and returns an
@@ -363,6 +385,8 @@ def ask(question: str, history: list[dict] | None = None,
     # would burn turns on a model that isn't converging, and the check is a
     # provenance guard, not an oracle — its own verdict can be wrong.
     corrected = False
+    # Likewise one attempt to rescue a turn that detoured into code_execution.
+    recovered = False
     # The raw content blocks of every response, logged to BigQuery alongside
     # the final answer for debugging what the model actually did.
     content_turns: list[list[dict]] = []
@@ -391,13 +415,22 @@ def ask(question: str, history: list[dict] | None = None,
         content_turns.append([block.model_dump(mode="json") for block in response.content])
 
         if has_unsafe_code_execution(response.content):
-            # Real data may already have been fetched via a real tool before
-            # the model detoured into code_execution (typically trying to also
-            # plot/export an image after a chart tool succeeded) — that detour
-            # is blocked, but the data itself is genuine, so surface it instead
-            # of discarding a correct answer.
-            return finish("\n\n".join(tool_summaries) if tool_summaries
-                          else UNSAFE_CODE_EXECUTION_MESSAGE)
+            logger.warning("Blocked an unsafe code_execution use")
+            # Real data has usually already been fetched by then — the detour
+            # into code_execution is typically an attempt to also plot or
+            # export something after a chart tool already succeeded. That data
+            # is genuine, so the turn is worth rescuing; but handing the raw
+            # tool text to the user as the answer (which is what this used to
+            # do) produces a wall of unlabelled numbers with the tools' own
+            # internal instructions embedded in it. Ask the model to write the
+            # answer from what it already has instead.
+            if tool_summaries and not recovered:
+                recovered = True
+                messages.append({"role": "assistant",
+                                 "content": _text_only(response.content)})
+                messages.append({"role": "user", "content": CODE_EXECUTION_RECOVERY})
+                continue
+            return finish(UNSAFE_CODE_EXECUTION_MESSAGE)
 
         if response.stop_reason == "tool_use":
             batch = execute_tool_calls(response)

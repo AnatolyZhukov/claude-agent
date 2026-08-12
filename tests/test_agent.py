@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import agent
 from agent import ToolCallTrace, build_skills, build_tools, execute_tool_calls
-from contracts import ToolResult
+from contracts import ChartType, ToolResult
 
 
 def tool_use(name, tool_input, block_id="tu_1"):
@@ -174,6 +174,68 @@ class TestGroundingCorrection:
 
         assert "51,161" in result.answer
         assert len(sent) == 3
+
+
+def server_tool_use(name, tool_input):
+    return SimpleNamespace(type="server_tool_use", name=name, input=tool_input,
+                           model_dump=lambda mode="json": {"type": "server_tool_use"})
+
+
+class TestCodeExecutionRecovery:
+    """What happens when a turn detours into the blocked code_execution tool
+    after real tools have already returned data.
+    """
+
+    _PLOT_ATTEMPT = server_tool_use("bash_code_execution", {"command": "python plot.py"})
+    _REVENUE_CALL = ("get_revenue", {"start_date": "2025-01-01", "end_date": "2025-12-31"})
+
+    def test_the_model_is_asked_to_answer_from_the_data_it_has(self, monkeypatch):
+        sent = TestGroundingCorrection._scripted(
+            monkeypatch,
+            response(tool_use(*self._REVENUE_CALL), stop_reason="tool_use"),
+            response(text("Let me plot that."), self._PLOT_ATTEMPT),
+            response(text("Revenue was $613,933.58.")),
+        )
+        result = agent.ask("chart revenue for 2025", log_history=False)
+
+        assert result.answer == "Revenue was $613,933.58."
+        assert "code_execution tool is not available" in sent[-1]["content"]
+
+    def test_raw_tool_output_is_never_handed_over_as_the_answer(self, monkeypatch):
+        # The regression this exists for: the answer used to be the tool
+        # results joined together, which reached the user as a wall of numbers
+        # carrying the tools' own instructions to the model ("summarize the
+        # trend rather than restating values").
+        TestGroundingCorrection._scripted(
+            monkeypatch,
+            response(tool_use(*self._REVENUE_CALL), stop_reason="tool_use"),
+            response(self._PLOT_ATTEMPT),
+            response(self._PLOT_ATTEMPT),
+        )
+        result = agent.ask("chart revenue for 2025", log_history=False)
+
+        assert result.answer == agent.UNSAFE_CODE_EXECUTION_MESSAGE
+        assert "Total revenue" not in result.answer
+
+    def test_a_detour_before_any_tool_ran_is_refused_outright(self, monkeypatch):
+        # Nothing has been fetched, so there is nothing to write an answer from.
+        TestGroundingCorrection._scripted(monkeypatch, response(self._PLOT_ATTEMPT))
+        result = agent.ask("chart revenue for 2025", log_history=False)
+        assert result.answer == agent.UNSAFE_CODE_EXECUTION_MESSAGE
+
+    def test_charts_already_produced_survive_the_detour(self, monkeypatch):
+        # The blocked turn doesn't invalidate what the real tools returned.
+        TestGroundingCorrection._scripted(
+            monkeypatch,
+            response(tool_use("get_chart_data", {
+                "metric": "revenue", "group_by": "category",
+                "start_date": "2025-01-01", "end_date": "2025-12-31",
+            }), stop_reason="tool_use"),
+            response(self._PLOT_ATTEMPT),
+            response(text("Technology leads.")),
+        )
+        result = agent.ask("chart revenue by category", log_history=False)
+        assert [c["chart_type"] for c in result.charts] == [ChartType.BAR]
 
 
 class TestPrompt:
