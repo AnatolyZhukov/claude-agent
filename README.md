@@ -110,7 +110,7 @@ What it does **not** do is judge reasoning. A number quoted correctly and then d
 | `revenue`, `profit`, `quantity`, `returned_revenue` | `SUM(sales)`, `SUM(profit)`, units sold, and sales belonging to orders that were later returned | money / count |
 | `cost` | sales minus profit — the database has **no** cost column, so this is a derived figure (see below) | money |
 | `orders` | `COUNT(DISTINCT order_id)` — non-additive across periods | count |
-| `revenue_per_order` | revenue ÷ orders (average order value) | money |
+| `revenue_per_order`, `revenue_per_customer` | revenue ÷ orders (average order value), and revenue ÷ distinct customers (average spend per customer) | money |
 | `profit_margin`, `discount_rate`, `return_rate` | profit ÷ revenue, the average discount, and the share of orders that were returned | percent |
 | `delivery_days` | average calendar days from `order_date` to `ship_date` | days |
 
@@ -144,7 +144,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-230 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+232 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

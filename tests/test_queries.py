@@ -188,6 +188,27 @@ class TestChartData:
         for category in revenue:
             assert margin[category] == pytest.approx(profit[category] / revenue[category])
 
+    def test_revenue_per_customer_is_revenue_over_distinct_customers(self):
+        args = ("category", "2025-01-01", "2025-12-31")
+        revenue = get_chart_data("revenue", *args).chart["data"]
+        per_customer = get_chart_data("revenue_per_customer", *args).chart["data"]
+        for category in revenue:
+            customers = _scalar(
+                "SELECT COUNT(DISTINCT customer_id) FROM orders WHERE date(order_date) "
+                f"BETWEEN '2025-01-01' AND '2025-12-31' AND category = '{category}'"
+            )
+            assert per_customer[category] == pytest.approx(revenue[category] / customers)
+
+    def test_revenue_per_customer_groups_do_not_add_up_to_the_whole(self):
+        # Not a defect: a customer active in three categories is counted once
+        # in each, so the per-group averages can't be summed or averaged into
+        # the figure for the period. Pinned so nobody "fixes" it later.
+        args = ("category", "2025-01-01", "2025-12-31")
+        per_group = get_chart_data("revenue_per_customer", *args).chart["data"]
+        overall = get_chart_data("revenue_per_customer", "year", "2025-01-01",
+                                 "2025-12-31").chart["data"]["2025"]
+        assert sum(per_group.values()) != pytest.approx(overall)
+
     def test_cost_is_revenue_minus_profit(self):
         args = ("category", "2024-01-01", "2024-12-31")
         revenue = get_chart_data("revenue", *args).chart["data"]

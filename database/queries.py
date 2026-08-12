@@ -226,6 +226,10 @@ METRIC_SQL = {
     # positive `sales` amount, so SUM(sales) is always > 0 — there's no
     # reachable zero-denominator group to divide by.
     "revenue_per_order": "SUM(sales) * 1.0 / COUNT(DISTINCT order_id)",
+    # Same shape, per customer rather than per order. Like every ratio here it
+    # is computed within each group, so the groups don't add up to the overall
+    # figure — a customer who buys in three categories counts once in each.
+    "revenue_per_customer": "SUM(sales) * 1.0 / COUNT(DISTINCT customer_id)",
     "profit_margin": "SUM(profit) * 1.0 / SUM(sales)",
     # AVG needs no such reasoning — SQLite's AVG is itself a safe aggregate
     # (NULL only over an empty group, and groups here are never empty).
@@ -272,7 +276,8 @@ _METRIC_LABELS = {
     # quantity the database doesn't have, so the definition has to be visible
     # wherever the number is shown.
     "cost": "Cost (sales − profit)",
-    "revenue_per_order": "Revenue per order", "profit_margin": "Profit margin",
+    "revenue_per_order": "Revenue per order",
+    "revenue_per_customer": "Revenue per customer", "profit_margin": "Profit margin",
     "discount_rate": "Discount rate", "return_rate": "Return rate",
     "returned_revenue": "Returned revenue", "delivery_days": "Delivery days",
 }
@@ -286,6 +291,7 @@ METRIC_FORMAT = {
     "orders": MetricFormat.COUNT, "quantity": MetricFormat.COUNT,
     "cost": MetricFormat.MONEY,
     "revenue_per_order": MetricFormat.MONEY,
+    "revenue_per_customer": MetricFormat.MONEY,
     "profit_margin": MetricFormat.PERCENT, "discount_rate": MetricFormat.PERCENT,
     "return_rate": MetricFormat.PERCENT, "returned_revenue": MetricFormat.MONEY,
     "delivery_days": MetricFormat.DAYS,
