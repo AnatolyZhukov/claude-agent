@@ -113,6 +113,17 @@ class TestPrompt:
         assert "must appear verbatim in a tool result" in rules
         assert "in your head" in rules
         assert "which definition you used" in rules
+        # The counterweight to those three: they constrain what may be
+        # claimed, and on their own pushed the model into one-line answers
+        # that dropped context it used to fetch (a top-by-revenue customer
+        # being loss-making). This one asks for the context back — as more
+        # tool calls, not as more prose.
+        assert "SEPARATE query for each candidate measure" in rules
+        # ...and the guard that rule needed: fetching the competing measures in
+        # one ranked, LIMITed query made the model rank by those columns too,
+        # naming an 11-order customer the top by order count when eight
+        # customers outside the top-10-by-revenue had more.
+        assert "wasn't ranked by" in rules
 
     def test_max_turns_message_states_the_actual_limit(self):
         assert str(agent.MAX_TURNS) in agent.MAX_TURNS_MESSAGE
