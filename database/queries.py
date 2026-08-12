@@ -258,6 +258,10 @@ GROUP_BY_SQL = {
     "ship_mode": "ship_mode",
 }
 
+# How many highest/lowest groups to name explicitly when a breakdown is too
+# long to hand over in full (see get_chart_data).
+_EXTREMES = 5
+
 # Display name for each dimension, for chart titles — same reason as
 # _METRIC_LABELS below: without it the raw whitelist key leaks into user-facing
 # text as "revenue by sub_category" / "by ship_mode".
@@ -350,10 +354,24 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
     lines = [f"{label}: {value}" for label, value in data.items()]
     summary = "\n".join(lines[:MAX_ROWS])
     if len(lines) > MAX_ROWS:
-        summary += (f"\n\n[Truncated: {len(lines)} groups in total, only the first {MAX_ROWS} "
-                    "are listed. The chart shown to the user has the complete series — "
-                    "summarize the trend rather than restating values, and re-query with a "
-                    "coarser group_by or a narrower date range if a specific group is needed.]")
+        # A chronologically-ordered series cut at MAX_ROWS shows its beginning
+        # and hides its end, and the model reads the visible part as the whole
+        # thing: asked for daily revenue across 2025 (320 days with orders) it
+        # named the peaks off the first 200 and missed the largest day of the
+        # year by a wide margin. The extremes are what anyone asks about, so
+        # they're appended explicitly rather than left to be inferred from a
+        # window that doesn't contain them.
+        extremes = sorted(data.items(), key=lambda item: item[1], reverse=True)
+        top = ", ".join(f"{label}: {value}" for label, value in extremes[:_EXTREMES])
+        bottom = ", ".join(f"{label}: {value}" for label, value in extremes[-_EXTREMES:])
+        summary += (
+            f"\n\n[Truncated: {len(lines)} groups in total, only the first {MAX_ROWS} are "
+            f"listed above, so that list is NOT the whole series and its highest value is "
+            f"NOT the maximum. Highest {_EXTREMES} across the full range: {top}. "
+            f"Lowest {_EXTREMES}: {bottom}. The user's chart shows everything — summarize "
+            f"the trend, quote these extremes for peaks/troughs, and re-query with a "
+            f"coarser group_by or a narrower range for anything else.]"
+        )
     return ToolResult(summary or "No data.", chart=chart)
 
 

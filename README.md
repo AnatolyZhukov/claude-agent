@@ -122,7 +122,7 @@ Dimensions (`GROUP_BY_SQL`) are the time buckets `day`/`week`/`month`/`quarter`/
 
 Results come back ordered by what the dimension is for: time buckets chronologically, everything else ranked by value, descending. Alphabetical order for a categorical breakdown leaves the model to rank the rows itself when the question was "which is biggest" — observed producing a numbered top-5 with two pairs of positions swapped, every individual number correct.
 
-Since a fine-grained bucket over a wide range can produce thousands of rows, `get_chart_data` caps the *text* it hands the model at 200 groups (with an explicit truncation note) while the chart itself keeps the full series.
+Since a fine-grained bucket over a wide range can produce thousands of rows, `get_chart_data` caps the *text* it hands the model at 200 groups while the chart itself keeps the full series. The truncation note names the five highest and five lowest groups across the whole range: a chronological series cut at 200 shows its beginning and hides its end, and asked about daily revenue in 2025 (320 days with orders) the model duly reported peaks off the visible window and missed the biggest day of the year by $8,000. Peaks and troughs are what get asked about, so they are stated rather than left to be inferred from a window that doesn't contain them.
 
 ## Chat history & feedback
 
@@ -144,7 +144,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-232 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+233 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

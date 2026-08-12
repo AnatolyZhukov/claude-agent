@@ -329,6 +329,21 @@ class TestChartDimensions:
         # One line per listed group, plus the blank line and the note.
         assert len(result.content.splitlines()) == MAX_ROWS + 2
 
+    def test_a_truncated_series_still_names_its_real_extremes(self):
+        # The listed window is the chronological start of the series, so the
+        # busiest day is usually outside it — naming the extremes explicitly is
+        # what stops the model reporting the largest visible value as the peak.
+        result = get_chart_data("revenue", "day", "2025-01-01", "2025-12-31")
+        data = result.chart["data"]
+        listed, _, note = result.content.partition("\n\n[Truncated:")
+        busiest = max(data, key=lambda label: data[label])
+        quietest = min(data, key=lambda label: data[label])
+
+        assert busiest not in listed
+        assert busiest in note
+        assert quietest in note
+        assert str(data[busiest]) in note
+
 
 class TestReturnsAndDeliveryMetrics:
     def test_return_rate_matches_the_returns_table(self):
