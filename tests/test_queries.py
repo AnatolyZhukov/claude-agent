@@ -15,6 +15,7 @@ from database.queries import (
     build_retention_matrix,
     get_active_users,
     get_chart_data,
+    get_matrix_data,
     get_report_data,
     get_revenue,
     run_select,
@@ -394,6 +395,54 @@ class TestReturnsAndDeliveryMetrics:
         days = get_chart_data("delivery_days", "ship_mode", *_YEAR).chart["data"]
         assert (days["Same Day"] < days["First Class"] < days["Second Class"]
                 < days["Standard Class"])
+
+
+class TestMatrixData:
+    _YEAR_2025 = ("2025-01-01", "2025-12-31")
+
+    def test_axes_keep_their_natural_order(self):
+        chart = get_matrix_data("revenue", "month", "category", *self._YEAR_2025).chart
+        assert chart["rows"] == sorted(chart["rows"])          # time reads chronologically
+        assert chart["columns"][0] == "Technology"             # everything else, largest first
+        assert chart["chart_type"] == ChartType.HEATMAP
+        assert chart["format"] == MetricFormat.MONEY
+
+    def test_cells_agree_with_the_same_metric_from_get_chart_data(self):
+        # Summing a column of the matrix has to reproduce that category's total
+        # for the period — the cross-check that the two-dimensional grouping
+        # didn't drop or double-count rows.
+        chart = get_matrix_data("revenue", "month", "category", *self._YEAR_2025).chart
+        by_category = get_chart_data("revenue", "category", *self._YEAR_2025).chart["data"]
+        for index, category in enumerate(chart["columns"]):
+            column = [row[index] for row in chart["matrix"] if row[index] is not None]
+            assert sum(column) == pytest.approx(by_category[category])
+
+    def test_a_combination_that_never_occurred_is_none_not_zero(self):
+        chart = get_matrix_data("revenue", "day", "sub_category",
+                                "2025-01-01", "2025-01-31").chart
+        # A single January day doesn't touch every sub-category, so the grid is
+        # necessarily sparse; empty means "never happened", not "summed to 0".
+        assert any(value is None for row in chart["matrix"] for value in row)
+        assert all(value != 0 for row in chart["matrix"] for value in row)
+
+    def test_an_oversized_pair_keeps_the_largest_and_says_so(self):
+        result = get_matrix_data("revenue", "state", "sub_category", *self._YEAR_2025)
+        assert len(result.chart["rows"]) == 24
+        assert len(result.chart["columns"]) == 12
+        assert "[Truncated" in result.content
+
+    def test_the_same_dimension_twice_is_rejected(self):
+        with pytest.raises(ValueError, match="different dimensions"):
+            get_matrix_data("revenue", "category", "category", *self._YEAR_2025)
+
+    def test_invalid_dimension_raises_for_run_tool_to_catch(self):
+        with pytest.raises(KeyError):
+            get_matrix_data("revenue", "month", "customer_name", *self._YEAR_2025)
+
+    def test_empty_range_reports_no_data(self):
+        result = get_matrix_data("revenue", "month", "category", "1990-01-01", "1990-12-31")
+        assert result.content == "No data."
+        assert result.chart["rows"] == []
 
 
 class TestPreviousPeriod:

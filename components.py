@@ -17,6 +17,7 @@ CAPABILITIES = [
     "discount rate, return rate, returned revenue, or delivery time — broken down "
     "by day/week/month/quarter/year, or by region, state, category, sub-category, "
     "segment, or shipping mode",
+    "Heatmaps of any metric across two dimensions at once (e.g. revenue per customer by month and category)",
     "Cohort retention analysis (day/week/month/quarter/year) with a heatmap table",
     "Dashboard-style HTML report (KPIs vs. previous period, trend, category/region "
     "breakdown, top sub-categories — for any of the metrics above), downloadable "
@@ -101,6 +102,44 @@ def render_cohort_table_html(chart: dict) -> str:
             else:
                 shade = _blue_shade(value, vmin, vmax)
                 cells.append(f'<td style="{shade}">{value:.1f}%</td>')
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+
+    return (
+        '<div class="cohort-table-wrapper">'
+        '<table class="cohort-table">'
+        f"<thead>{header}</thead><tbody>{''.join(body_rows)}</tbody></table>"
+        "</div>"
+    )
+
+
+def render_matrix_table_html(chart: dict) -> str:
+    """Builds a metric-across-two-dimensions heatmap as raw HTML.
+
+    Deliberately the same shading (`_blue_shade`) and the same table markup as
+    the cohort heatmap above, so the two read as one thing rather than two
+    lookalike widgets — the difference is only what the axes mean and that
+    cells here are formatted per the metric's MetricFormat instead of always
+    being percentages. Same reason as there for hand-built HTML rather than a
+    pandas Styler.
+    """
+    matrix, columns = chart["matrix"], chart["columns"]
+    present = [v for row in matrix for v in row if v is not None]
+    vmin, vmax = (min(present), max(present)) if present else (0, 0)
+    fmt = chart["format"]
+
+    header_cells = "".join(f"<th>{html.escape(str(c))}</th>" for c in columns)
+    header = f'<tr><th>{html.escape(chart["row_label"])}</th>{header_cells}</tr>'
+
+    body_rows = []
+    for label, row in zip(chart["rows"], matrix, strict=True):
+        cells = [f"<td>{html.escape(str(label))}</td>"]
+        for value in row:
+            if value is None:
+                # An empty cell, not a zero: this combination never occurred.
+                cells.append("<td></td>")
+            else:
+                cells.append(f'<td style="{_blue_shade(value, vmin, vmax)}">'
+                             f"{_format_metric_value(value, fmt, 0)}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
@@ -322,6 +361,13 @@ def render_chart(chart: dict, key_prefix: str = "chart") -> None:
             st.write("No data.")
             return
         st.markdown(render_cohort_table_html(chart), unsafe_allow_html=True)
+        return
+
+    if chart_type == ChartType.HEATMAP:
+        if not chart["rows"]:
+            st.write("No data.")
+            return
+        st.markdown(render_matrix_table_html(chart), unsafe_allow_html=True)
         return
 
     series = pd.Series(chart["data"], name=chart["title"])

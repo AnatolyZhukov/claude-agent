@@ -21,6 +21,7 @@ class ChartType(StrEnum):
     LINE = "line"
     BAR = "bar"
     COHORT_HEATMAP = "cohort_heatmap"
+    HEATMAP = "heatmap"
     REPORT = "report"
 
 

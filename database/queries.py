@@ -375,6 +375,108 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
     return ToolResult(summary or "No data.", chart=chart)
 
 
+# A heatmap stops being readable well before it stops being renderable, and
+# a careless pair of dimensions is large: state x sub_category is 59 x 17, day
+# x category is 300+ rows. Past these the biggest groups are kept and the rest
+# reported as dropped, rather than returning a wall of cells.
+_MATRIX_MAX_ROWS = 24
+_MATRIX_MAX_COLUMNS = 12
+
+
+def _ordered_labels(totals: dict[str, float], dimension: str, limit: int) -> list[str]:
+    """The labels to keep for one axis of a matrix, in the order to show them.
+
+    Ranked by total to decide *which* ones survive the limit — dropping the
+    largest groups would misrepresent the data far worse than dropping the
+    smallest. Then put back into the axis's natural reading order: chronological
+    for a time bucket, largest-first for anything else, matching how
+    get_chart_data orders the same dimensions.
+    """
+    kept = sorted(totals, key=lambda label: totals[label], reverse=True)[:limit]
+    if dimension in _PERIOD_SQL:
+        return sorted(kept)
+    return kept
+
+
+def get_matrix_data(metric: str, rows: str, columns: str, start_date: str, end_date: str,
+                    region: str | None = None, category: str | None = None) -> ToolResult:
+    """One metric across two dimensions at once, as a heatmap.
+
+    get_chart_data answers "revenue by month" and "revenue by category"; this
+    answers "revenue by month AND category" in one pass, which otherwise had to
+    go through raw SQL and came back as a plain table — so a question asking
+    for a heatmap got an ASCII grid pasted into the answer instead.
+
+    KeyError on an unknown metric/dimension is the real guard (see
+    get_chart_data). Two identical axes are rejected outright: it would produce
+    a diagonal, which is never what was meant.
+    """
+    if rows == columns:
+        raise ValueError("rows and columns must be different dimensions")
+    metric_expr = METRIC_SQL[metric]
+    row_expr, column_expr = GROUP_BY_SQL[rows], GROUP_BY_SQL[columns]
+
+    sql = (f"SELECT {row_expr} AS row_label, {column_expr} AS column_label, "
+           f"{metric_expr} AS value FROM orders "
+           "WHERE date(order_date) BETWEEN :start AND :end")
+    params = {"start": start_date, "end": end_date}
+    sql = _apply_filters(sql, params, region, category)
+    sql += f" GROUP BY {row_expr}, {column_expr}"
+
+    with get_engine().connect() as conn:
+        result = conn.execute(text(sql), params).fetchall()
+
+    title = (f"{_METRIC_LABELS[metric].lower()} by {_GROUP_BY_LABELS[rows]} "
+             f"and {_GROUP_BY_LABELS[columns]}")
+    if region:
+        title += f" ({region})"
+    if category:
+        title += f" ({category})"
+    chart: dict = {
+        "title": title,
+        "chart_type": ChartType.HEATMAP,
+        "row_label": _GROUP_BY_LABELS[rows].capitalize(),
+        "rows": [],
+        "columns": [],
+        "matrix": [],
+        "format": METRIC_FORMAT[metric],
+    }
+    if not result:
+        return ToolResult("No data.", chart=chart)
+
+    # Ranked by the total across the other axis, so "which rows matter" is
+    # decided by the data rather than by whichever labels sort first.
+    row_totals: dict[str, float] = {}
+    column_totals: dict[str, float] = {}
+    values: dict[tuple[str, str], float] = {}
+    for row in result:
+        values[(row.row_label, row.column_label)] = row.value
+        row_totals[row.row_label] = row_totals.get(row.row_label, 0.0) + row.value
+        column_totals[row.column_label] = column_totals.get(row.column_label, 0.0) + row.value
+
+    row_labels = _ordered_labels(row_totals, rows, _MATRIX_MAX_ROWS)
+    column_labels = _ordered_labels(column_totals, columns, _MATRIX_MAX_COLUMNS)
+    # None, not 0.0: an empty cell means that combination never occurred, which
+    # is different from it having summed to zero.
+    chart["rows"] = row_labels
+    chart["columns"] = column_labels
+    chart["matrix"] = [[values.get((r, c)) for c in column_labels] for r in row_labels]
+
+    lines = []
+    for row_label, row_values in zip(row_labels, chart["matrix"], strict=True):
+        cells = ", ".join(f"{c}: {v}" for c, v in zip(column_labels, row_values, strict=True)
+                          if v is not None)
+        lines.append(f"{row_label} — {cells}")
+    summary = "\n".join(lines)
+    dropped = (len(row_totals) - len(row_labels), len(column_totals) - len(column_labels))
+    if any(dropped):
+        summary += (f"\n\n[Truncated to the largest {len(row_labels)} {rows} values and "
+                    f"{len(column_labels)} {columns} values; {dropped[0]} {rows} and "
+                    f"{dropped[1]} {columns} groups are not shown, so row and column totals "
+                    "here are not totals for the whole period.]")
+    return ToolResult(summary, chart=chart)
+
+
 def _previous_period(start_date: str, end_date: str) -> tuple[str, str]:
     """The immediately preceding period of the same length as
     [start_date, end_date], for period-over-period KPI deltas (Tableau's

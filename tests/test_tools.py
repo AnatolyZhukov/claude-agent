@@ -131,6 +131,24 @@ class TestRunTool:
         assert not result.is_error
         assert result.chart["data"]
 
+    def test_matrix_tool_returns_a_heatmap(self):
+        result = run_tool("get_matrix_data", {
+            "metric": "revenue", "rows": "month", "columns": "category",
+            "start_date": "2025-01-01", "end_date": "2025-12-31",
+        })
+        assert not result.is_error
+        assert result.chart["chart_type"] == ChartType.HEATMAP
+
+    def test_matrix_tool_rejects_one_dimension_twice_as_an_error_result(self):
+        # ValueError is in EXPECTED_TOOL_ERRORS, so the model gets a message it
+        # can retry from rather than the whole ask() aborting.
+        result = run_tool("get_matrix_data", {
+            "metric": "revenue", "rows": "month", "columns": "month",
+            "start_date": "2025-01-01", "end_date": "2025-12-31",
+        })
+        assert result.is_error
+        assert "different dimensions" in result.content
+
     def test_cohort_granularity_defaults_to_month(self):
         result = run_tool("get_cohort_retention", {
             "start_date": "2023-01-01", "end_date": "2023-06-30",
@@ -164,6 +182,9 @@ class TestToolSchemas:
         assert set(by_name["get_chart_data"]["metric"]["enum"]) == set(METRIC_SQL)
         assert set(by_name["get_chart_data"]["group_by"]["enum"]) == set(GROUP_BY_SQL)
         assert set(by_name["generate_report"]["metric"]["enum"]) == set(METRIC_SQL)
+        assert set(by_name["get_matrix_data"]["metric"]["enum"]) == set(METRIC_SQL)
+        for axis in ("rows", "columns"):
+            assert set(by_name["get_matrix_data"][axis]["enum"]) == set(GROUP_BY_SQL)
 
     def test_every_metric_has_a_label_and_a_format(self):
         assert set(METRIC_FORMAT) == set(METRIC_SQL)
