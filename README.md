@@ -83,6 +83,7 @@ Only needed if you have a newer export of the dataset.
 - The agent has six tools (declared in `tool_schemas.json`, implemented in `database/queries.py`): `get_revenue` and `get_active_users` for common metrics, `get_chart_data` for a metric broken down by a dimension (rendered as a chart in the Streamlit UI — see [Metrics & dimensions](#metrics--dimensions) below), `get_cohort_retention` for day/week/month/quarter/year cohort retention (rendered as a color-coded table), `generate_report` for a dashboard-style HTML report (see [Dashboard report](#dashboard-report) below), and `query_database` for anything else (raw SQL — `SELECT` or `WITH ... SELECT`).
 - `query_database` only ever executes read-only statements — enforced in code, not just by prompting. On top of that, the database connection itself is opened **read-only** at the SQLite level (`mode=ro`), so even a write statement that slipped past that check would fail — the agent cannot modify the database.
 - The full schema (tables, columns, valid `region`/`category` values) is included in the system prompt so the model can write correct SQL.
+- Three rules in the system prompt exist to keep the prose around the numbers honest, each written after a specific observed failure: every entity named in an answer must appear verbatim in a tool result (the model otherwise recalls this well-known public dataset from training and states facts it never queried); totals/shares/percentages must come from a tool call rather than being worked out in prose (mental arithmetic over tool results was repeatedly wrong); and a business term with no column and no metric behind it must have its definition stated in the answer.
 - Raw `query_database` results are capped at 200 rows, and a capped result says so explicitly in the text handed to the model — a silently truncated result would otherwise be reported as if it were complete.
 - When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself (the vetting logic lives in `code_execution_guard.py`), instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
 
@@ -93,12 +94,15 @@ Only needed if you have a newer export of the dataset.
 | Metric | Meaning | Rendered as |
 | --- | --- | --- |
 | `revenue`, `profit`, `quantity`, `returned_revenue` | `SUM(sales)`, `SUM(profit)`, units sold, and sales belonging to orders that were later returned | money / count |
+| `cost` | sales minus profit — the database has **no** cost column, so this is a derived figure (see below) | money |
 | `orders` | `COUNT(DISTINCT order_id)` — non-additive across periods | count |
 | `revenue_per_order` | revenue ÷ orders (average order value) | money |
 | `profit_margin`, `discount_rate`, `return_rate` | profit ÷ revenue, the average discount, and the share of orders that were returned | percent |
 | `delivery_days` | average calendar days from `order_date` to `ship_date` | days |
 
 The returns metrics read the `returns` table through an `IN (SELECT order_id FROM returns)` subquery rather than a join, so every metric stays a bare aggregate over `FROM orders` — the only shape the callers know how to build.
+
+`cost` is the odd one out: it names a quantity the dataset doesn't have. It exists as a metric precisely because "what are our biggest costs" is a natural question — left to improvise, the model writes `SUM(sales) - SUM(profit)` in ad-hoc SQL and reports the result as a plain "Total Cost", as if the column existed. Defining it once puts the formula in its own label (`Cost (sales − profit)`), so it travels into every chart title and report column, and puts its limitation in the tool description: `sales` is already net of discount, so the figure lumps cost of goods, discounts and everything else together, and can never attribute a loss to discounting specifically.
 
 Dimensions (`GROUP_BY_SQL`) are the time buckets `day`/`week`/`month`/`quarter`/`year`, which render as a trend line, plus `region`, `state`, `category`, `sub_category`, `segment`, and `ship_mode`, which render as bars. The time buckets are the same `_PERIOD_SQL` expressions the cohort tool uses, so a quarter means exactly the same thing in a chart as in a cohort table. Both whitelists are mirrored in the tool schemas' `enum`s, and a test asserts the two stay in step — a value the model can send but the SQL layer can't build would be a `KeyError` waiting to happen.
 
@@ -124,7 +128,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-188 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+192 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

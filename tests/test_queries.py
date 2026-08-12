@@ -188,6 +188,23 @@ class TestChartData:
         for category in revenue:
             assert margin[category] == pytest.approx(profit[category] / revenue[category])
 
+    def test_cost_is_revenue_minus_profit(self):
+        args = ("category", "2024-01-01", "2024-12-31")
+        revenue = get_chart_data("revenue", *args).chart["data"]
+        profit = get_chart_data("profit", *args).chart["data"]
+        cost = get_chart_data("cost", *args).chart["data"]
+        for category in revenue:
+            assert cost[category] == pytest.approx(revenue[category] - profit[category])
+
+    def test_cost_title_states_its_own_definition(self):
+        # The database has no cost column, so the number is only meaningful
+        # alongside the formula that produced it — the label carries it into
+        # every chart title and report column so the definition can't be
+        # dropped on the way to the user.
+        title = get_chart_data("cost", "category", "2024-01-01", "2024-12-31").chart["title"]
+        assert title == "cost (sales − profit) by category"
+        assert METRIC_FORMAT["cost"] == MetricFormat.MONEY
+
     def test_discount_rate_is_between_zero_and_one(self):
         result = get_chart_data("discount_rate", "category", "2024-01-01", "2024-12-31")
         assert all(0 <= v <= 1 for v in result.chart["data"].values())

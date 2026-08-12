@@ -187,6 +187,17 @@ METRIC_SQL = {
     "profit": "SUM(profit)",
     "orders": "COUNT(DISTINCT order_id)",
     "quantity": "SUM(quantity)",
+    # The dataset has no cost column, so this is everything that wasn't profit.
+    # It exists as a named metric precisely because "what are our biggest
+    # costs" is a natural question with no natural answer here: left to
+    # improvise, the model invents this same definition in ad-hoc SQL and
+    # presents it as if the database had a cost column. Defined once, labeled
+    # with its own formula (see _METRIC_LABELS) so the definition travels into
+    # every chart title and report column, and documented in tool_schemas.json
+    # with what it cannot do — sales is already net of discount, so this lumps
+    # COGS, discounts and everything else together and can never attribute a
+    # loss to discounting specifically.
+    "cost": "SUM(sales) - SUM(profit)",
     # Derived (ratio) metrics rather than plain aggregates. Safe to divide
     # unguarded: every group these are used in (GROUP BY month/region/
     # category/sub_category) is non-empty by construction, so
@@ -236,6 +247,10 @@ _GROUP_BY_LABELS = {
 # everywhere instead of leaking the raw snake_case key to the user.
 _METRIC_LABELS = {
     "revenue": "Revenue", "profit": "Profit", "orders": "Orders", "quantity": "Quantity",
+    # Carries its own formula: unlike every other label here, this one names a
+    # quantity the database doesn't have, so the definition has to be visible
+    # wherever the number is shown.
+    "cost": "Cost (sales − profit)",
     "revenue_per_order": "Revenue per order", "profit_margin": "Profit margin",
     "discount_rate": "Discount rate", "return_rate": "Return rate",
     "returned_revenue": "Returned revenue", "delivery_days": "Delivery days",
@@ -248,6 +263,7 @@ _METRIC_LABELS = {
 METRIC_FORMAT = {
     "revenue": MetricFormat.MONEY, "profit": MetricFormat.MONEY,
     "orders": MetricFormat.COUNT, "quantity": MetricFormat.COUNT,
+    "cost": MetricFormat.MONEY,
     "revenue_per_order": MetricFormat.MONEY,
     "profit_margin": MetricFormat.PERCENT, "discount_rate": MetricFormat.PERCENT,
     "return_rate": MetricFormat.PERCENT, "returned_revenue": MetricFormat.MONEY,

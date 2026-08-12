@@ -103,5 +103,16 @@ class TestPrompt:
         assert "orders(" in agent.SYSTEM_PROMPT
         assert "region values:" in agent.SYSTEM_PROMPT
 
+    def test_answer_grounding_rules_are_stated(self):
+        # These three rules exist because of specific observed failures (see
+        # the project checklist): naming a customer that no tool call had
+        # returned, computing shares in prose and getting them wrong, and
+        # inventing a definition for "cost". Nothing else in the test suite
+        # would notice if one of them were dropped from the prompt.
+        rules = agent.SYSTEM_PROMPT
+        assert "must appear verbatim in a tool result" in rules
+        assert "in your head" in rules
+        assert "which definition you used" in rules
+
     def test_max_turns_message_states_the_actual_limit(self):
         assert str(agent.MAX_TURNS) in agent.MAX_TURNS_MESSAGE

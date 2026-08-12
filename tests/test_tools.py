@@ -108,8 +108,9 @@ class TestRunTool:
         assert not result.is_error
         assert result.chart["chart_type"] == ChartType.BAR
 
-    @pytest.mark.parametrize("metric", ["return_rate", "returned_revenue", "delivery_days"])
-    def test_both_tools_accept_the_returns_and_delivery_metrics(self, metric):
+    @pytest.mark.parametrize("metric", ["return_rate", "returned_revenue", "delivery_days",
+                                        "cost"])
+    def test_both_tools_accept_the_returns_delivery_and_cost_metrics(self, metric):
         chart = run_tool("get_chart_data", {
             "metric": metric, "group_by": "ship_mode",
             "start_date": "2024-01-01", "end_date": "2024-12-31",
