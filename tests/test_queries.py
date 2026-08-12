@@ -271,6 +271,17 @@ class TestChartDimensions:
         }
         assert len({round(t, 4) for t in totals.values()}) == 1, totals
 
+    @pytest.mark.parametrize("group_by", ["region", "state", "category", "sub_category",
+                                          "segment", "ship_mode"])
+    def test_categorical_dimensions_come_back_ranked(self, group_by):
+        values = list(get_chart_data("revenue", group_by, *_YEAR).chart["data"].values())
+        assert values == sorted(values, reverse=True)
+
+    @pytest.mark.parametrize("group_by", ["day", "week", "month", "quarter", "year"])
+    def test_time_buckets_stay_chronological(self, group_by):
+        labels = list(get_chart_data("revenue", group_by, *_YEAR).chart["data"])
+        assert labels == sorted(labels)
+
     def test_state_reads_the_state_province_column(self):
         states = get_chart_data("revenue", "state", *_YEAR).chart["data"]
         assert "California" in states

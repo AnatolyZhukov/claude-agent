@@ -106,6 +106,8 @@ The returns metrics read the `returns` table through an `IN (SELECT order_id FRO
 
 Dimensions (`GROUP_BY_SQL`) are the time buckets `day`/`week`/`month`/`quarter`/`year`, which render as a trend line, plus `region`, `state`, `category`, `sub_category`, `segment`, and `ship_mode`, which render as bars. The time buckets are the same `_PERIOD_SQL` expressions the cohort tool uses, so a quarter means exactly the same thing in a chart as in a cohort table. Both whitelists are mirrored in the tool schemas' `enum`s, and a test asserts the two stay in step — a value the model can send but the SQL layer can't build would be a `KeyError` waiting to happen.
 
+Results come back ordered by what the dimension is for: time buckets chronologically, everything else ranked by value, descending. Alphabetical order for a categorical breakdown leaves the model to rank the rows itself when the question was "which is biggest" — observed producing a numbered top-5 with two pairs of positions swapped, every individual number correct.
+
 Since a fine-grained bucket over a wide range can produce thousands of rows, `get_chart_data` caps the *text* it hands the model at 200 groups (with an explicit truncation note) while the chart itself keeps the full series.
 
 ## Chat history & feedback
@@ -128,7 +130,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-192 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+203 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

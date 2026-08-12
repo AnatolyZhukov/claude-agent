@@ -288,7 +288,14 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
            f"WHERE date(order_date) BETWEEN :start AND :end")
     params = {"start": start_date, "end": end_date}
     sql = _apply_filters(sql, params, region, category)
-    sql += f" GROUP BY {group_expr} ORDER BY {group_expr}"
+    # A time bucket's label sorts chronologically, which is the only order a
+    # trend reads in. Every other dimension is answering some form of "which
+    # one is biggest", so it comes back ranked: ordering those alphabetically
+    # leaves the model to rank the rows itself in prose, and it gets that
+    # wrong (observed: a numbered "top 5" with positions 2/3 and 4/5 swapped,
+    # every individual number correct).
+    order_expr = group_expr if group_by in _PERIOD_SQL else "value DESC"
+    sql += f" GROUP BY {group_expr} ORDER BY {order_expr}"
 
     with get_engine().connect() as conn:
         rows = conn.execute(text(sql), params).fetchall()
