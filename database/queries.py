@@ -6,6 +6,7 @@ tools.py never has to inspect the shape of what came back.
 import re
 from collections.abc import Iterable
 from datetime import date, timedelta
+from functools import cache
 from typing import Any
 
 from sqlalchemy import text
@@ -93,6 +94,26 @@ def run_select(sql: str) -> ToolResult:
         "rows": [list(row) for row in rows],
     }
     return ToolResult(summary, chart=table)
+
+
+@cache
+def known_entity_names() -> set[str]:
+    """Every customer and product name in the database, for the grounding
+    check in grounding.py.
+
+    Only these two columns: they are the high-cardinality dimensions, the ones
+    the model can produce from its memory of this public dataset without
+    querying (the failure this exists to catch). Regions, categories and
+    sub-categories are in the system prompt already and are named in framing
+    sentences all the time, so matching on them would flag ordinary prose.
+
+    Cached for the life of the process — the database is read-only, so the
+    vocabulary cannot change under us.
+    """
+    sql = ("SELECT DISTINCT customer_name FROM orders "
+           "UNION SELECT DISTINCT product_name FROM orders")
+    with get_engine().connect() as conn:
+        return {row[0] for row in conn.execute(text(sql)) if row[0]}
 
 
 def get_revenue(start_date: str, end_date: str, region: str | None = None,

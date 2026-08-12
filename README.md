@@ -10,6 +10,7 @@ Analyst assistant for the **Sample Superstore** dataset, built directly on the A
 - `tool_schemas.json` — the tool schemas advertised to the API, kept as data rather than a literal in code.
 - `contracts.py` — `ToolResult` and the `ChartType` enum: the shapes shared between the tool layer and the UI.
 - `code_execution_guard.py` — safety policy that lets `ask()` reject any use of the `code_execution` sandbox beyond reading the Skill file.
+- `grounding.py` — pure check that re-reads a drafted answer against the raw tool output and reports what isn't in it. See [Keeping answers grounded](#keeping-answers-grounded) below.
 - `app.py` — Streamlit chat UI (the main way to use the agent); thin orchestrator only — session state, chat loop, layout.
 - `components.py` — UI building blocks used by `app.py`: CSS injection, the cohort-retention HTML table, the self-contained HTML dashboard report (KPI cards, inline-SVG trend, category/region breakdown, detail table), the chat/rating widgets, the history table, and the right-hand "what I can do" panel content (plus a "roadmap" block that renders only when there's something on it).
 - `history.py` — logs every question/answer (and its 👍/👎 rating) to BigQuery; also serves the "Request History" tab. See [Chat history & feedback](#chat-history--feedback) below.
@@ -87,6 +88,19 @@ Only needed if you have a newer export of the dataset.
 - Raw `query_database` results are capped at 200 rows, and a capped result says so explicitly in the text handed to the model — a silently truncated result would otherwise be reported as if it were complete.
 - When `SKILL_ID` is set, the model can consult the `metric-aggregation-rules` Skill via Anthropic's `code_execution` tool — but that sandbox has no access to the real database, so `ask()` rejects any answer that uses `code_execution` for anything beyond reading the Skill file itself (the vetting logic lives in `code_execution_guard.py`), instead of risking a fabricated answer. A request timeout (60s) also keeps a question that goes down that path from hanging the app.
 
+## Keeping answers grounded
+
+The SQL and the numbers were never the weak part — the prose around them was. Reviewing real answers turned up a customer named in an answer that no tool call had returned (true, as it happens: this is a public dataset the model partly remembers), shares of a total worked out in prose and wrong while every figure they came from was right, and a "Total Cost" column the database doesn't have. Each got a rule in the system prompt, and prompt rules alone proved to be worth roughly one round of whack-a-mole: the rule asking for the competing measures "in the same tool call" promptly produced a new error, ranking customers by a column its query hadn't ordered by.
+
+So `grounding.py` checks the drafted answer before the user sees it, deterministically:
+
+- **Numbers** — every figure in the answer must be readable off a number in the tool output, allowing for rounding and truncation at the precision it was written with, for a ratio being reported as a percentage, and for a negative value carrying its sign in words ("losing $1,983"). Structure is exempt: small integers (list numbering, "top 5"), and years. A number with a `$` or `%` on it is never structure, however small — a single-digit percentage is precisely the shape of the error being looked for.
+- **Entities** — the answer is matched against the customer and product names actually in the database, and any that appear there but in no tool result are reported. Checking against the database's own vocabulary rather than "words that look like a name" is what keeps this precise: a recalled record matches, ordinary capitalized prose doesn't.
+
+When something is unsupported, `ask()` sends the draft back with the specific offending values, once. That extra API call only happens when the check fires. In practice the model responds by querying for what it had been about to assert — asked for revenue by segment "and what share each is", it drafted 62.8/30.3/18.0%, was corrected, went back with a window function and returned the true 56.5/27.3/16.2%. If the rewrite is still ungrounded it goes out anyway with a logged warning: looping wastes turns on a model that isn't converging, and the check is a provenance guard rather than an oracle.
+
+What it does **not** do is judge reasoning. A number quoted correctly and then described wrongly passes, and so does a ranking that the data doesn't support — a correctly quoted top-10-by-revenue row called "the busiest customer" is grounded and still false. That case is handled, imperfectly, by a prompt rule.
+
 ## Metrics & dimensions
 
 `get_chart_data` and `generate_report` share one catalog, defined in `database/queries.py` as three parallel dicts — `METRIC_SQL` (the aggregate expression), `_METRIC_LABELS` (its display name), and `METRIC_FORMAT` (how to render its value). Adding a metric is an entry in each; nothing in the UI layer changes.
@@ -130,7 +144,7 @@ Install the dev tooling first (`pip install -r requirements-dev.txt`), then:
 pytest
 ```
 
-203 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
+230 offline tests covering the SQL guards and filters, tool dispatch and its error contract, the cohort-retention matrix, the dashboard report's period-over-period math, metric/dimension selection, and HTML building, the `code_execution` safety policy, request assembly, and schema generation. No API calls and no network — they run against the bundled read-only database in about a second, so they're cheap to run on every change (unlike `eval/`, which costs real API calls).
 
 ```
 ruff check .

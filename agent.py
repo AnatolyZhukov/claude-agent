@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 
 from code_execution_guard import has_unsafe_code_execution
 from contracts import ToolResult
+from database.queries import known_entity_names
 from dbt_schema import build_db_schema
+from grounding import ungrounded_claims
 from history import log_interaction
 from tools import load_tool_schemas, run_tool
 
@@ -59,6 +61,20 @@ UNSAFE_CODE_EXECUTION_MESSAGE = (
 MAX_TURNS_MESSAGE = (
     f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
     "Please try rephrasing the question or breaking it into smaller parts."
+)
+# Sent back to the model when the drafted answer says something the tool
+# results don't contain (see grounding.py). Phrased as a correction to redo the
+# answer, not as an error: the tool data already fetched is usually fine and
+# only the prose around it overreached.
+CORRECTION_TEMPLATE = (
+    "Your draft answer contains values or names that appear in no tool result "
+    "in this conversation: {items}.\n"
+    "Every figure and every entity you mention must come from a tool result — "
+    "a total or a share you worked out yourself doesn't count, and neither "
+    "does anything you recall about this dataset. Either call a tool to "
+    "establish them, or write the answer without them. Then give the final "
+    "answer as if for the first time — the user never saw the draft, so don't "
+    "mention it, apologize, or announce a correction."
 )
 
 
@@ -338,6 +354,11 @@ def ask(question: str, history: list[dict] | None = None,
     # refusal that would hide a correct answer.
     tool_summaries: list[str] = []
     trace: list[ToolCallTrace] = []
+    # The grounding check gets exactly one corrective round-trip. If the
+    # rewrite is still ungrounded the answer goes out anyway (logged): looping
+    # would burn turns on a model that isn't converging, and the check is a
+    # provenance guard, not an oracle — its own verdict can be wrong.
+    corrected = False
     # The raw content blocks of every response, logged to BigQuery alongside
     # the final answer for debugging what the model actually did.
     content_turns: list[list[dict]] = []
@@ -383,6 +404,22 @@ def ask(question: str, history: list[dict] | None = None,
             messages.append({"role": "user", "content": batch.tool_results})
             continue
 
-        return finish("\n".join(b.text for b in response.content if b.type == "text"))
+        answer = "\n".join(b.text for b in response.content if b.type == "text")
+
+        # Only meaningful once a tool has actually returned something: with no
+        # tool results there is nothing to check against, and answers like
+        # "here's what I can do" would be flagged wholesale.
+        if tool_summaries and not corrected:
+            problems = ungrounded_claims(answer, "\n".join(tool_summaries),
+                                         known_entity_names())
+            if problems:
+                logger.warning("Ungrounded values in draft answer: %s", problems)
+                corrected = True
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": CORRECTION_TEMPLATE.format(
+                    items=", ".join(problems[:10]))})
+                continue
+
+        return finish(answer)
 
     return finish(MAX_TURNS_MESSAGE)

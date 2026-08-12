@@ -11,11 +11,17 @@ from contracts import ToolResult
 
 
 def tool_use(name, tool_input, block_id="tu_1"):
-    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=block_id)
+    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=block_id,
+                           model_dump=lambda mode="json": {"type": "tool_use", "name": name})
 
 
-def response(*blocks):
-    return SimpleNamespace(content=list(blocks))
+def text(body):
+    return SimpleNamespace(type="text", text=body,
+                           model_dump=lambda mode="json": {"type": "text", "text": body})
+
+
+def response(*blocks, stop_reason="end_turn"):
+    return SimpleNamespace(content=list(blocks), stop_reason=stop_reason)
 
 
 class TestBuildSkills:
@@ -96,6 +102,78 @@ class TestToolCallTrace:
         assert (trace.tool, trace.input, trace.result, trace.is_error) == (
             "t", {"a": 1}, "text", True,
         )
+
+
+class TestGroundingCorrection:
+    """ask()'s one corrective round-trip when a draft answer says something no
+    tool returned. The API is replaced by a scripted sequence of responses, so
+    these run offline like everything else here.
+    """
+
+    @staticmethod
+    def _scripted(monkeypatch, *responses):
+        """Points ask() at a fake client replaying `responses`, and returns the
+        list of messages each call was made with.
+        """
+        monkeypatch.delenv("SKILL_ID", raising=False)
+        sent = []
+        remaining = list(responses)
+
+        def create(**kwargs):
+            sent.append(kwargs["messages"][-1])
+            return remaining.pop(0)
+
+        monkeypatch.setattr(agent, "get_client", lambda: SimpleNamespace(
+            messages=SimpleNamespace(create=create)))
+        return sent
+
+    # A real tool call, so there is genuine tool output to check the answer
+    # against — the check is skipped entirely when nothing was called.
+    _REVENUE_CALL = ("get_revenue", {"start_date": "2025-01-01", "end_date": "2025-12-31"})
+
+    def test_an_ungrounded_answer_is_sent_back_once(self, monkeypatch):
+        sent = self._scripted(
+            monkeypatch,
+            response(tool_use(*self._REVENUE_CALL), stop_reason="tool_use"),
+            response(text("Revenue was $613,933.58, which is $50,000 per month.")),
+            response(text("Revenue was $613,933.58.")),
+        )
+        result = agent.ask("revenue in 2025?", log_history=False)
+
+        assert result.answer == "Revenue was $613,933.58."
+        # The last thing the model was asked was the correction, naming the
+        # figure it made up rather than a generic complaint.
+        assert "50,000" in sent[-1]["content"]
+
+    def test_a_grounded_answer_is_returned_without_a_second_pass(self, monkeypatch):
+        sent = self._scripted(
+            monkeypatch,
+            response(tool_use(*self._REVENUE_CALL), stop_reason="tool_use"),
+            response(text("Revenue was $613,933.58.")),
+        )
+        result = agent.ask("revenue in 2025?", log_history=False)
+
+        assert result.answer == "Revenue was $613,933.58."
+        assert len(sent) == 2
+
+    def test_an_answer_with_no_tool_calls_is_not_checked(self, monkeypatch):
+        # "What can you do?" has nothing to be grounded in; checking it would
+        # flag the whole reply.
+        self._scripted(monkeypatch, response(text("I can answer questions about sales.")))
+        result = agent.ask("what can you do?", log_history=False)
+        assert result.answer == "I can answer questions about sales."
+
+    def test_a_still_ungrounded_rewrite_is_returned_rather_than_looped(self, monkeypatch):
+        sent = self._scripted(
+            monkeypatch,
+            response(tool_use(*self._REVENUE_CALL), stop_reason="tool_use"),
+            response(text("Revenue was $613,933.58, or $50,000 per month.")),
+            response(text("Revenue was $613,933.58, roughly $51,161 per month.")),
+        )
+        result = agent.ask("revenue in 2025?", log_history=False)
+
+        assert "51,161" in result.answer
+        assert len(sent) == 3
 
 
 class TestPrompt:
