@@ -17,7 +17,9 @@ from dotenv import load_dotenv
 
 from code_execution_guard import has_unsafe_code_execution
 from contracts import ToolResult
+from database.queries import known_entity_names
 from dbt_schema import build_db_schema
+from grounding import ungrounded_claims
 from history import log_interaction
 from tools import load_tool_schemas, run_tool
 
@@ -50,6 +52,15 @@ TIMEOUT_MESSAGE = (
     "answered via a direct database query (e.g. a specific metric, date range, "
     "or breakdown)."
 )
+CODE_EXECUTION_RECOVERY = (
+    "The code_execution tool is not available for this and its output can't be "
+    "used. You don't need it: the database tools above have already returned "
+    "the figures, and the app renders the charts, tables and heatmaps for the "
+    "user by itself from those same results — you never have to draw or export "
+    "anything. Write the final answer now from the tool results you already "
+    "have, in prose: summarize what they show instead of listing the rows back, "
+    "and don't mention this message."
+)
 UNSAFE_CODE_EXECUTION_MESSAGE = (
     "I can't answer this — it led me to use a tool that has no access to the "
     "real sample_superstore data, so I won't report numbers I can't verify. "
@@ -59,6 +70,20 @@ UNSAFE_CODE_EXECUTION_MESSAGE = (
 MAX_TURNS_MESSAGE = (
     f"I couldn't finish answering this within {MAX_TURNS} tool-use steps. "
     "Please try rephrasing the question or breaking it into smaller parts."
+)
+# Sent back to the model when the drafted answer says something the tool
+# results don't contain (see grounding.py). Phrased as a correction to redo the
+# answer, not as an error: the tool data already fetched is usually fine and
+# only the prose around it overreached.
+CORRECTION_TEMPLATE = (
+    "Your draft answer contains values or names that appear in no tool result "
+    "in this conversation: {items}.\n"
+    "Every figure and every entity you mention must come from a tool result — "
+    "a total or a share you worked out yourself doesn't count, and neither "
+    "does anything you recall about this dataset. Either call a tool to "
+    "establish them, or write the answer without them. Then give the final "
+    "answer as if for the first time — the user never saw the draft, so don't "
+    "mention it, apologize, or announce a correction."
 )
 
 
@@ -105,8 +130,13 @@ SYSTEM_PROMPT = (
     "- get_chart_data when the user wants a chart/plot/visualization or a "
     "breakdown — over time (day/week/month/quarter/year) or by region, state, "
     "category, sub-category, customer segment, or shipping mode. It also covers "
-    "returns (return_rate, returned_revenue) and fulfillment speed "
-    "(delivery_days), so prefer it over raw SQL for those too\n"
+    "returns (return_rate, returned_revenue), fulfillment speed "
+    "(delivery_days), and costs (cost), so prefer it over raw SQL for those "
+    "too — its `cost` metric is the one agreed definition of a cost in this "
+    "dataset, so use it instead of improvising one in SQL\n"
+    "- get_matrix_data when one metric is wanted across two dimensions at once "
+    "— a heatmap, a matrix, a cross-tab, \"by month and category\" — rather "
+    "than several get_chart_data calls or raw SQL\n"
     "- get_cohort_retention when the user wants daily, weekly, monthly, "
     "quarterly, or yearly cohort/retention analysis (pass granularity)\n"
     "- generate_report when the user wants a dashboard, summary report, or "
@@ -120,15 +150,46 @@ SYSTEM_PROMPT = (
     "- Never answer from assumption or refuse before calling a tool — the tool "
     "result is authoritative, even if it contradicts what you'd expect.\n"
     "- Never guess or invent numbers — only report what a tool returns.\n"
+    "- Every entity you name — a customer, product, region, category, "
+    "sub-category — must appear verbatim in a tool result in this "
+    "conversation. To mention one that isn't there, call a tool for it first. "
+    "This is a well-known public dataset that you may partly remember: never "
+    "rely on that memory, the database you are querying is not identical to "
+    "the one you have seen before.\n"
+    "- Don't work out a total, a share or a percentage in your head from "
+    "numbers a tool returned — get it from another tool call, or leave it out. "
+    "Arithmetic done in prose is not verifiable and is frequently wrong.\n"
+    "- If the question uses a business term that has no column in the schema "
+    "and no dedicated metric (churn, LTV, CAC, ...), say which definition you "
+    "used in the first line of your answer, before any numbers — never present "
+    "a figure you derived yourself as if the database held it directly.\n"
+    "- \"Top\", \"best\" and \"biggest\" can each mean revenue, profit or "
+    "volume. Say which one you used, and run a SEPARATE query for each "
+    "candidate measure, ranked by that measure — never a single query ranked "
+    "by one measure with the others sitting alongside as columns, because that "
+    "only ever ranks the measure you ordered by. Within each of those separate "
+    "queries, do also select the other measures as columns, so you can "
+    "describe that winner in full instead of by the one number it won on. When "
+    "the winners differ, or a winner looks bad on another measure — the top "
+    "customer by revenue losing money, a growing category with negative profit "
+    "— that contradiction is the most useful thing in the answer, so state it "
+    "with the numbers behind it.\n"
+    "- A ranked, truncated result (ORDER BY one measure with a LIMIT) "
+    "establishes the ranking for that measure only. Its other columns describe "
+    "the rows that happen to be there — the highest profit among the top 10 by "
+    "revenue is not the highest profit overall, and neither is the highest "
+    "order count. Never call a row the top/biggest by a measure the result "
+    "wasn't ranked by; query that measure separately instead.\n"
     "- If a tool call fails, tell the user clearly what went wrong instead of "
     "guessing an answer.\n"
     "- The code_execution tool has NO access to the sample_superstore database "
     "or any real data — it can only read the metric-aggregation-rules Skill "
     "file. Never use code_execution to compute, simulate, or fetch metrics; "
     "always use query_database/get_revenue/get_active_users/get_chart_data/"
-    "get_cohort_retention/generate_report for anything data-related, even for "
-    "complex or multi-step analyses.\n"
-    "- get_chart_data, get_cohort_retention, and generate_report already return "
+    "get_matrix_data/get_cohort_retention/generate_report for anything "
+    "data-related, even for complex or multi-step analyses.\n"
+    "- get_chart_data, get_matrix_data, get_cohort_retention, and "
+    "generate_report already return "
     "everything needed for the app itself to render the chart/report, and "
     "query_database does the same whenever its result has more than one row — "
     "never call code_execution to also plot, draw, or export an image after one "
@@ -263,6 +324,19 @@ def execute_tool_calls(response: Any) -> ToolCallBatch:
     return batch
 
 
+def _text_only(content_blocks: list[Any]) -> list[dict] | str:
+    """The text blocks of a response, as plain message content.
+
+    Used to replay a turn that also contained code_execution blocks. Those are
+    executed server-side and come back paired with their own result blocks;
+    sending them back up would mean re-submitting a tool exchange this app
+    never ran, so only what the model actually said is kept. Falls back to a
+    placeholder because message content can't be empty.
+    """
+    texts = [b.text for b in content_blocks if b.type == "text" and b.text.strip()]
+    return [{"type": "text", "text": t} for t in texts] or "(thinking)"
+
+
 def ask(question: str, history: list[dict] | None = None,
         log_history: bool = True) -> AskResult:
     """Answers `question`, driving the tool-use loop, and returns an
@@ -306,6 +380,13 @@ def ask(question: str, history: list[dict] | None = None,
     # refusal that would hide a correct answer.
     tool_summaries: list[str] = []
     trace: list[ToolCallTrace] = []
+    # The grounding check gets exactly one corrective round-trip. If the
+    # rewrite is still ungrounded the answer goes out anyway (logged): looping
+    # would burn turns on a model that isn't converging, and the check is a
+    # provenance guard, not an oracle — its own verdict can be wrong.
+    corrected = False
+    # Likewise one attempt to rescue a turn that detoured into code_execution.
+    recovered = False
     # The raw content blocks of every response, logged to BigQuery alongside
     # the final answer for debugging what the model actually did.
     content_turns: list[list[dict]] = []
@@ -334,13 +415,22 @@ def ask(question: str, history: list[dict] | None = None,
         content_turns.append([block.model_dump(mode="json") for block in response.content])
 
         if has_unsafe_code_execution(response.content):
-            # Real data may already have been fetched via a real tool before
-            # the model detoured into code_execution (typically trying to also
-            # plot/export an image after a chart tool succeeded) — that detour
-            # is blocked, but the data itself is genuine, so surface it instead
-            # of discarding a correct answer.
-            return finish("\n\n".join(tool_summaries) if tool_summaries
-                          else UNSAFE_CODE_EXECUTION_MESSAGE)
+            logger.warning("Blocked an unsafe code_execution use")
+            # Real data has usually already been fetched by then — the detour
+            # into code_execution is typically an attempt to also plot or
+            # export something after a chart tool already succeeded. That data
+            # is genuine, so the turn is worth rescuing; but handing the raw
+            # tool text to the user as the answer (which is what this used to
+            # do) produces a wall of unlabelled numbers with the tools' own
+            # internal instructions embedded in it. Ask the model to write the
+            # answer from what it already has instead.
+            if tool_summaries and not recovered:
+                recovered = True
+                messages.append({"role": "assistant",
+                                 "content": _text_only(response.content)})
+                messages.append({"role": "user", "content": CODE_EXECUTION_RECOVERY})
+                continue
+            return finish(UNSAFE_CODE_EXECUTION_MESSAGE)
 
         if response.stop_reason == "tool_use":
             batch = execute_tool_calls(response)
@@ -351,6 +441,22 @@ def ask(question: str, history: list[dict] | None = None,
             messages.append({"role": "user", "content": batch.tool_results})
             continue
 
-        return finish("\n".join(b.text for b in response.content if b.type == "text"))
+        answer = "\n".join(b.text for b in response.content if b.type == "text")
+
+        # Only meaningful once a tool has actually returned something: with no
+        # tool results there is nothing to check against, and answers like
+        # "here's what I can do" would be flagged wholesale.
+        if tool_summaries and not corrected:
+            problems = ungrounded_claims(answer, "\n".join(tool_summaries),
+                                         known_entity_names())
+            if problems:
+                logger.warning("Ungrounded values in draft answer: %s", problems)
+                corrected = True
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": CORRECTION_TEMPLATE.format(
+                    items=", ".join(problems[:10]))})
+                continue
+
+        return finish(answer)
 
     return finish(MAX_TURNS_MESSAGE)

@@ -35,8 +35,8 @@
       "properties": {
         "metric": {
           "type": "string",
-          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
-          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id), quantity = SUM(quantity) (units sold), returned_revenue = sales belonging to orders that were later returned. Derived (ratio) metrics, not summable totals: revenue_per_order = revenue / orders (a.k.a. average order value / AOV), profit_margin = profit / revenue (a fraction, e.g. 0.15 for 15%), discount_rate = average discount applied (a fraction), return_rate = share of orders that were returned (a fraction), delivery_days = average calendar days from order_date to ship_date (use this for any question about shipping/delivery/fulfillment speed)."
+          "enum": ["revenue", "profit", "orders", "quantity", "cost", "revenue_per_order", "revenue_per_customer", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
+          "description": "revenue = SUM(sales), profit = SUM(profit), orders = COUNT(DISTINCT order_id), quantity = SUM(quantity) (units sold), returned_revenue = sales belonging to orders that were later returned. cost = sales minus profit — use this for any question about costs, and say in your answer that it is defined that way, because the database has NO cost column: `sales` is already net of discount, so this figure lumps cost of goods, discounts and everything else together and can never show that a loss was caused by discounting specifically (compare discount_rate for that). Derived (ratio) metrics, not summable totals: revenue_per_order = revenue / orders (a.k.a. average order value / AOV), revenue_per_customer = revenue / distinct customers, i.e. average spend per customer — use it for any \"per customer\" or \"average customer\" question, and note that it is computed within each group, so a customer active in three categories counts once in each and the groups do not add up to the figure for the whole period, profit_margin = profit / revenue (a fraction, e.g. 0.15 for 15%), discount_rate = average discount applied (a fraction), return_rate = share of orders that were returned (a fraction), delivery_days = average calendar days from order_date to ship_date (use this for any question about shipping/delivery/fulfillment speed)."
         },
         "group_by": {
           "type": "string",
@@ -49,6 +49,35 @@
         "category": {"type": "string", "description": "Optional exact category name to filter by"}
       },
       "required": ["metric", "group_by", "start_date", "end_date"]
+    }
+  },
+  {
+    "name": "get_matrix_data",
+    "description": "Get one metric across TWO dimensions at once, rendered for the user as a color-shaded heatmap table. Use this for any question asking for a heatmap, a matrix, a cross-tab, or a metric \"by X and Y\" (e.g. revenue by month and category, profit margin by region and segment) — do not build it out of several get_chart_data calls or hand-written SQL, and never draw a grid of numbers in your answer text, because the app already renders the heatmap itself. The two dimensions must be different. Only the largest 24 row values and 12 column values are kept, so pick dimensions that are worth crossing rather than the finest ones available.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "metric": {
+          "type": "string",
+          "enum": ["revenue", "profit", "orders", "quantity", "cost", "revenue_per_order", "revenue_per_customer", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
+          "description": "Same metric catalogue as get_chart_data — see its description for what each one means."
+        },
+        "rows": {
+          "type": "string",
+          "enum": ["day", "week", "month", "quarter", "year", "region", "state", "category", "sub_category", "segment", "ship_mode"],
+          "description": "Dimension down the side of the heatmap. Time buckets are shown chronologically; every other dimension largest-first."
+        },
+        "columns": {
+          "type": "string",
+          "enum": ["day", "week", "month", "quarter", "year", "region", "state", "category", "sub_category", "segment", "ship_mode"],
+          "description": "Dimension across the top of the heatmap. Must differ from `rows`."
+        },
+        "start_date": {"type": "string", "description": "Start date, YYYY-MM-DD"},
+        "end_date": {"type": "string", "description": "End date, YYYY-MM-DD"},
+        "region": {"type": "string", "description": "Optional exact region name to filter by"},
+        "category": {"type": "string", "description": "Optional exact category name to filter by"}
+      },
+      "required": ["metric", "rows", "columns", "start_date", "end_date"]
     }
   },
   {
@@ -75,8 +104,8 @@
         "category": {"type": "string", "description": "Optional exact category name to filter by"},
         "metric": {
           "type": "string",
-          "enum": ["revenue", "profit", "orders", "quantity", "revenue_per_order", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
-          "description": "Which metric drives the monthly trend, category/region breakdown, and top sub-categories table. Defaults to revenue. Options: revenue, profit, orders, quantity (units sold), revenue_per_order (a.k.a. average order value / AOV), profit_margin (profit as a % of revenue), discount_rate (average discount applied, as a %), return_rate (share of orders returned, as a %), returned_revenue (sales in orders that were returned), delivery_days (average days from order to shipment). Use this to rebuild the dashboard around a different metric — e.g. metric=orders for order volume, or metric=profit_margin when the user asks about margins rather than totals. The KPI row itself always shows revenue, profit, and orders together no matter what's picked here."
+          "enum": ["revenue", "profit", "orders", "quantity", "cost", "revenue_per_order", "revenue_per_customer", "profit_margin", "discount_rate", "return_rate", "returned_revenue", "delivery_days"],
+          "description": "Which metric drives the monthly trend, category/region breakdown, and top sub-categories table. Defaults to revenue. Options: revenue, profit, orders, quantity (units sold), cost (sales minus profit — the database has no cost column, see get_chart_data for the caveat), revenue_per_order (a.k.a. average order value / AOV), revenue_per_customer (average spend per customer), profit_margin (profit as a % of revenue), discount_rate (average discount applied, as a %), return_rate (share of orders returned, as a %), returned_revenue (sales in orders that were returned), delivery_days (average days from order to shipment). Use this to rebuild the dashboard around a different metric — e.g. metric=orders for order volume, or metric=profit_margin when the user asks about margins rather than totals. The KPI row itself always shows revenue, profit, and orders together no matter what's picked here."
         }
       },
       "required": ["start_date", "end_date"]

@@ -15,6 +15,7 @@ from database.queries import (
     build_retention_matrix,
     get_active_users,
     get_chart_data,
+    get_matrix_data,
     get_report_data,
     get_revenue,
     run_select,
@@ -188,6 +189,44 @@ class TestChartData:
         for category in revenue:
             assert margin[category] == pytest.approx(profit[category] / revenue[category])
 
+    def test_revenue_per_customer_is_revenue_over_distinct_customers(self):
+        args = ("category", "2025-01-01", "2025-12-31")
+        revenue = get_chart_data("revenue", *args).chart["data"]
+        per_customer = get_chart_data("revenue_per_customer", *args).chart["data"]
+        for category in revenue:
+            customers = _scalar(
+                "SELECT COUNT(DISTINCT customer_id) FROM orders WHERE date(order_date) "
+                f"BETWEEN '2025-01-01' AND '2025-12-31' AND category = '{category}'"
+            )
+            assert per_customer[category] == pytest.approx(revenue[category] / customers)
+
+    def test_revenue_per_customer_groups_do_not_add_up_to_the_whole(self):
+        # Not a defect: a customer active in three categories is counted once
+        # in each, so the per-group averages can't be summed or averaged into
+        # the figure for the period. Pinned so nobody "fixes" it later.
+        args = ("category", "2025-01-01", "2025-12-31")
+        per_group = get_chart_data("revenue_per_customer", *args).chart["data"]
+        overall = get_chart_data("revenue_per_customer", "year", "2025-01-01",
+                                 "2025-12-31").chart["data"]["2025"]
+        assert sum(per_group.values()) != pytest.approx(overall)
+
+    def test_cost_is_revenue_minus_profit(self):
+        args = ("category", "2024-01-01", "2024-12-31")
+        revenue = get_chart_data("revenue", *args).chart["data"]
+        profit = get_chart_data("profit", *args).chart["data"]
+        cost = get_chart_data("cost", *args).chart["data"]
+        for category in revenue:
+            assert cost[category] == pytest.approx(revenue[category] - profit[category])
+
+    def test_cost_title_states_its_own_definition(self):
+        # The database has no cost column, so the number is only meaningful
+        # alongside the formula that produced it — the label carries it into
+        # every chart title and report column so the definition can't be
+        # dropped on the way to the user.
+        title = get_chart_data("cost", "category", "2024-01-01", "2024-12-31").chart["title"]
+        assert title == "cost (sales − profit) by category"
+        assert METRIC_FORMAT["cost"] == MetricFormat.MONEY
+
     def test_discount_rate_is_between_zero_and_one(self):
         result = get_chart_data("discount_rate", "category", "2024-01-01", "2024-12-31")
         assert all(0 <= v <= 1 for v in result.chart["data"].values())
@@ -254,6 +293,17 @@ class TestChartDimensions:
         }
         assert len({round(t, 4) for t in totals.values()}) == 1, totals
 
+    @pytest.mark.parametrize("group_by", ["region", "state", "category", "sub_category",
+                                          "segment", "ship_mode"])
+    def test_categorical_dimensions_come_back_ranked(self, group_by):
+        values = list(get_chart_data("revenue", group_by, *_YEAR).chart["data"].values())
+        assert values == sorted(values, reverse=True)
+
+    @pytest.mark.parametrize("group_by", ["day", "week", "month", "quarter", "year"])
+    def test_time_buckets_stay_chronological(self, group_by):
+        labels = list(get_chart_data("revenue", group_by, *_YEAR).chart["data"])
+        assert labels == sorted(labels)
+
     def test_state_reads_the_state_province_column(self):
         states = get_chart_data("revenue", "state", *_YEAR).chart["data"]
         assert "California" in states
@@ -279,6 +329,21 @@ class TestChartDimensions:
         assert "[Truncated:" in result.content
         # One line per listed group, plus the blank line and the note.
         assert len(result.content.splitlines()) == MAX_ROWS + 2
+
+    def test_a_truncated_series_still_names_its_real_extremes(self):
+        # The listed window is the chronological start of the series, so the
+        # busiest day is usually outside it — naming the extremes explicitly is
+        # what stops the model reporting the largest visible value as the peak.
+        result = get_chart_data("revenue", "day", "2025-01-01", "2025-12-31")
+        data = result.chart["data"]
+        listed, _, note = result.content.partition("\n\n[Truncated:")
+        busiest = max(data, key=lambda label: data[label])
+        quietest = min(data, key=lambda label: data[label])
+
+        assert busiest not in listed
+        assert busiest in note
+        assert quietest in note
+        assert str(data[busiest]) in note
 
 
 class TestReturnsAndDeliveryMetrics:
@@ -330,6 +395,54 @@ class TestReturnsAndDeliveryMetrics:
         days = get_chart_data("delivery_days", "ship_mode", *_YEAR).chart["data"]
         assert (days["Same Day"] < days["First Class"] < days["Second Class"]
                 < days["Standard Class"])
+
+
+class TestMatrixData:
+    _YEAR_2025 = ("2025-01-01", "2025-12-31")
+
+    def test_axes_keep_their_natural_order(self):
+        chart = get_matrix_data("revenue", "month", "category", *self._YEAR_2025).chart
+        assert chart["rows"] == sorted(chart["rows"])          # time reads chronologically
+        assert chart["columns"][0] == "Technology"             # everything else, largest first
+        assert chart["chart_type"] == ChartType.HEATMAP
+        assert chart["format"] == MetricFormat.MONEY
+
+    def test_cells_agree_with_the_same_metric_from_get_chart_data(self):
+        # Summing a column of the matrix has to reproduce that category's total
+        # for the period — the cross-check that the two-dimensional grouping
+        # didn't drop or double-count rows.
+        chart = get_matrix_data("revenue", "month", "category", *self._YEAR_2025).chart
+        by_category = get_chart_data("revenue", "category", *self._YEAR_2025).chart["data"]
+        for index, category in enumerate(chart["columns"]):
+            column = [row[index] for row in chart["matrix"] if row[index] is not None]
+            assert sum(column) == pytest.approx(by_category[category])
+
+    def test_a_combination_that_never_occurred_is_none_not_zero(self):
+        chart = get_matrix_data("revenue", "day", "sub_category",
+                                "2025-01-01", "2025-01-31").chart
+        # A single January day doesn't touch every sub-category, so the grid is
+        # necessarily sparse; empty means "never happened", not "summed to 0".
+        assert any(value is None for row in chart["matrix"] for value in row)
+        assert all(value != 0 for row in chart["matrix"] for value in row)
+
+    def test_an_oversized_pair_keeps_the_largest_and_says_so(self):
+        result = get_matrix_data("revenue", "state", "sub_category", *self._YEAR_2025)
+        assert len(result.chart["rows"]) == 24
+        assert len(result.chart["columns"]) == 12
+        assert "[Truncated" in result.content
+
+    def test_the_same_dimension_twice_is_rejected(self):
+        with pytest.raises(ValueError, match="different dimensions"):
+            get_matrix_data("revenue", "category", "category", *self._YEAR_2025)
+
+    def test_invalid_dimension_raises_for_run_tool_to_catch(self):
+        with pytest.raises(KeyError):
+            get_matrix_data("revenue", "month", "customer_name", *self._YEAR_2025)
+
+    def test_empty_range_reports_no_data(self):
+        result = get_matrix_data("revenue", "month", "category", "1990-01-01", "1990-12-31")
+        assert result.content == "No data."
+        assert result.chart["rows"] == []
 
 
 class TestPreviousPeriod:

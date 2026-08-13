@@ -35,6 +35,10 @@ _TOOL_HANDLERS: dict[str, Callable[[dict], ToolResult]] = {
     "get_cohort_retention": lambda i: queries.get_cohort_retention(
         i["start_date"], i["end_date"], i.get("granularity", "month")
     ),
+    "get_matrix_data": lambda i: queries.get_matrix_data(
+        i["metric"], i["rows"], i["columns"], i["start_date"], i["end_date"],
+        i.get("region"), i.get("category"),
+    ),
     "get_chart_data": lambda i: queries.get_chart_data(
         i["metric"], i["group_by"], i["start_date"], i["end_date"],
         i.get("region"), i.get("category"),

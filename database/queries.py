@@ -6,6 +6,7 @@ tools.py never has to inspect the shape of what came back.
 import re
 from collections.abc import Iterable
 from datetime import date, timedelta
+from functools import cache
 from typing import Any
 
 from sqlalchemy import text
@@ -93,6 +94,26 @@ def run_select(sql: str) -> ToolResult:
         "rows": [list(row) for row in rows],
     }
     return ToolResult(summary, chart=table)
+
+
+@cache
+def known_entity_names() -> set[str]:
+    """Every customer and product name in the database, for the grounding
+    check in grounding.py.
+
+    Only these two columns: they are the high-cardinality dimensions, the ones
+    the model can produce from its memory of this public dataset without
+    querying (the failure this exists to catch). Regions, categories and
+    sub-categories are in the system prompt already and are named in framing
+    sentences all the time, so matching on them would flag ordinary prose.
+
+    Cached for the life of the process — the database is read-only, so the
+    vocabulary cannot change under us.
+    """
+    sql = ("SELECT DISTINCT customer_name FROM orders "
+           "UNION SELECT DISTINCT product_name FROM orders")
+    with get_engine().connect() as conn:
+        return {row[0] for row in conn.execute(text(sql)) if row[0]}
 
 
 def get_revenue(start_date: str, end_date: str, region: str | None = None,
@@ -187,6 +208,17 @@ METRIC_SQL = {
     "profit": "SUM(profit)",
     "orders": "COUNT(DISTINCT order_id)",
     "quantity": "SUM(quantity)",
+    # The dataset has no cost column, so this is everything that wasn't profit.
+    # It exists as a named metric precisely because "what are our biggest
+    # costs" is a natural question with no natural answer here: left to
+    # improvise, the model invents this same definition in ad-hoc SQL and
+    # presents it as if the database had a cost column. Defined once, labeled
+    # with its own formula (see _METRIC_LABELS) so the definition travels into
+    # every chart title and report column, and documented in tool_schemas.json
+    # with what it cannot do — sales is already net of discount, so this lumps
+    # COGS, discounts and everything else together and can never attribute a
+    # loss to discounting specifically.
+    "cost": "SUM(sales) - SUM(profit)",
     # Derived (ratio) metrics rather than plain aggregates. Safe to divide
     # unguarded: every group these are used in (GROUP BY month/region/
     # category/sub_category) is non-empty by construction, so
@@ -194,6 +226,10 @@ METRIC_SQL = {
     # positive `sales` amount, so SUM(sales) is always > 0 — there's no
     # reachable zero-denominator group to divide by.
     "revenue_per_order": "SUM(sales) * 1.0 / COUNT(DISTINCT order_id)",
+    # Same shape, per customer rather than per order. Like every ratio here it
+    # is computed within each group, so the groups don't add up to the overall
+    # figure — a customer who buys in three categories counts once in each.
+    "revenue_per_customer": "SUM(sales) * 1.0 / COUNT(DISTINCT customer_id)",
     "profit_margin": "SUM(profit) * 1.0 / SUM(sales)",
     # AVG needs no such reasoning — SQLite's AVG is itself a safe aggregate
     # (NULL only over an empty group, and groups here are never empty).
@@ -222,6 +258,10 @@ GROUP_BY_SQL = {
     "ship_mode": "ship_mode",
 }
 
+# How many highest/lowest groups to name explicitly when a breakdown is too
+# long to hand over in full (see get_chart_data).
+_EXTREMES = 5
+
 # Display name for each dimension, for chart titles — same reason as
 # _METRIC_LABELS below: without it the raw whitelist key leaks into user-facing
 # text as "revenue by sub_category" / "by ship_mode".
@@ -236,7 +276,12 @@ _GROUP_BY_LABELS = {
 # everywhere instead of leaking the raw snake_case key to the user.
 _METRIC_LABELS = {
     "revenue": "Revenue", "profit": "Profit", "orders": "Orders", "quantity": "Quantity",
-    "revenue_per_order": "Revenue per order", "profit_margin": "Profit margin",
+    # Carries its own formula: unlike every other label here, this one names a
+    # quantity the database doesn't have, so the definition has to be visible
+    # wherever the number is shown.
+    "cost": "Cost (sales − profit)",
+    "revenue_per_order": "Revenue per order",
+    "revenue_per_customer": "Revenue per customer", "profit_margin": "Profit margin",
     "discount_rate": "Discount rate", "return_rate": "Return rate",
     "returned_revenue": "Returned revenue", "delivery_days": "Delivery days",
 }
@@ -248,7 +293,9 @@ _METRIC_LABELS = {
 METRIC_FORMAT = {
     "revenue": MetricFormat.MONEY, "profit": MetricFormat.MONEY,
     "orders": MetricFormat.COUNT, "quantity": MetricFormat.COUNT,
+    "cost": MetricFormat.MONEY,
     "revenue_per_order": MetricFormat.MONEY,
+    "revenue_per_customer": MetricFormat.MONEY,
     "profit_margin": MetricFormat.PERCENT, "discount_rate": MetricFormat.PERCENT,
     "return_rate": MetricFormat.PERCENT, "returned_revenue": MetricFormat.MONEY,
     "delivery_days": MetricFormat.DAYS,
@@ -272,7 +319,14 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
            f"WHERE date(order_date) BETWEEN :start AND :end")
     params = {"start": start_date, "end": end_date}
     sql = _apply_filters(sql, params, region, category)
-    sql += f" GROUP BY {group_expr} ORDER BY {group_expr}"
+    # A time bucket's label sorts chronologically, which is the only order a
+    # trend reads in. Every other dimension is answering some form of "which
+    # one is biggest", so it comes back ranked: ordering those alphabetically
+    # leaves the model to rank the rows itself in prose, and it gets that
+    # wrong (observed: a numbered "top 5" with positions 2/3 and 4/5 swapped,
+    # every individual number correct).
+    order_expr = group_expr if group_by in _PERIOD_SQL else "value DESC"
+    sql += f" GROUP BY {group_expr} ORDER BY {order_expr}"
 
     with get_engine().connect() as conn:
         rows = conn.execute(text(sql), params).fetchall()
@@ -300,11 +354,127 @@ def get_chart_data(metric: str, group_by: str, start_date: str, end_date: str,
     lines = [f"{label}: {value}" for label, value in data.items()]
     summary = "\n".join(lines[:MAX_ROWS])
     if len(lines) > MAX_ROWS:
-        summary += (f"\n\n[Truncated: {len(lines)} groups in total, only the first {MAX_ROWS} "
-                    "are listed. The chart shown to the user has the complete series — "
-                    "summarize the trend rather than restating values, and re-query with a "
-                    "coarser group_by or a narrower date range if a specific group is needed.]")
+        # A chronologically-ordered series cut at MAX_ROWS shows its beginning
+        # and hides its end, and the model reads the visible part as the whole
+        # thing: asked for daily revenue across 2025 (320 days with orders) it
+        # named the peaks off the first 200 and missed the largest day of the
+        # year by a wide margin. The extremes are what anyone asks about, so
+        # they're appended explicitly rather than left to be inferred from a
+        # window that doesn't contain them.
+        extremes = sorted(data.items(), key=lambda item: item[1], reverse=True)
+        top = ", ".join(f"{label}: {value}" for label, value in extremes[:_EXTREMES])
+        bottom = ", ".join(f"{label}: {value}" for label, value in extremes[-_EXTREMES:])
+        summary += (
+            f"\n\n[Truncated: {len(lines)} groups in total, only the first {MAX_ROWS} are "
+            f"listed above, so that list is NOT the whole series and its highest value is "
+            f"NOT the maximum. Highest {_EXTREMES} across the full range: {top}. "
+            f"Lowest {_EXTREMES}: {bottom}. The user's chart shows everything — summarize "
+            f"the trend, quote these extremes for peaks/troughs, and re-query with a "
+            f"coarser group_by or a narrower range for anything else.]"
+        )
     return ToolResult(summary or "No data.", chart=chart)
+
+
+# A heatmap stops being readable well before it stops being renderable, and
+# a careless pair of dimensions is large: state x sub_category is 59 x 17, day
+# x category is 300+ rows. Past these the biggest groups are kept and the rest
+# reported as dropped, rather than returning a wall of cells.
+_MATRIX_MAX_ROWS = 24
+_MATRIX_MAX_COLUMNS = 12
+
+
+def _ordered_labels(totals: dict[str, float], dimension: str, limit: int) -> list[str]:
+    """The labels to keep for one axis of a matrix, in the order to show them.
+
+    Ranked by total to decide *which* ones survive the limit — dropping the
+    largest groups would misrepresent the data far worse than dropping the
+    smallest. Then put back into the axis's natural reading order: chronological
+    for a time bucket, largest-first for anything else, matching how
+    get_chart_data orders the same dimensions.
+    """
+    kept = sorted(totals, key=lambda label: totals[label], reverse=True)[:limit]
+    if dimension in _PERIOD_SQL:
+        return sorted(kept)
+    return kept
+
+
+def get_matrix_data(metric: str, rows: str, columns: str, start_date: str, end_date: str,
+                    region: str | None = None, category: str | None = None) -> ToolResult:
+    """One metric across two dimensions at once, as a heatmap.
+
+    get_chart_data answers "revenue by month" and "revenue by category"; this
+    answers "revenue by month AND category" in one pass, which otherwise had to
+    go through raw SQL and came back as a plain table — so a question asking
+    for a heatmap got an ASCII grid pasted into the answer instead.
+
+    KeyError on an unknown metric/dimension is the real guard (see
+    get_chart_data). Two identical axes are rejected outright: it would produce
+    a diagonal, which is never what was meant.
+    """
+    if rows == columns:
+        raise ValueError("rows and columns must be different dimensions")
+    metric_expr = METRIC_SQL[metric]
+    row_expr, column_expr = GROUP_BY_SQL[rows], GROUP_BY_SQL[columns]
+
+    sql = (f"SELECT {row_expr} AS row_label, {column_expr} AS column_label, "
+           f"{metric_expr} AS value FROM orders "
+           "WHERE date(order_date) BETWEEN :start AND :end")
+    params = {"start": start_date, "end": end_date}
+    sql = _apply_filters(sql, params, region, category)
+    sql += f" GROUP BY {row_expr}, {column_expr}"
+
+    with get_engine().connect() as conn:
+        result = conn.execute(text(sql), params).fetchall()
+
+    title = (f"{_METRIC_LABELS[metric].lower()} by {_GROUP_BY_LABELS[rows]} "
+             f"and {_GROUP_BY_LABELS[columns]}")
+    if region:
+        title += f" ({region})"
+    if category:
+        title += f" ({category})"
+    chart: dict = {
+        "title": title,
+        "chart_type": ChartType.HEATMAP,
+        "row_label": _GROUP_BY_LABELS[rows].capitalize(),
+        "rows": [],
+        "columns": [],
+        "matrix": [],
+        "format": METRIC_FORMAT[metric],
+    }
+    if not result:
+        return ToolResult("No data.", chart=chart)
+
+    # Ranked by the total across the other axis, so "which rows matter" is
+    # decided by the data rather than by whichever labels sort first.
+    row_totals: dict[str, float] = {}
+    column_totals: dict[str, float] = {}
+    values: dict[tuple[str, str], float] = {}
+    for row in result:
+        values[(row.row_label, row.column_label)] = row.value
+        row_totals[row.row_label] = row_totals.get(row.row_label, 0.0) + row.value
+        column_totals[row.column_label] = column_totals.get(row.column_label, 0.0) + row.value
+
+    row_labels = _ordered_labels(row_totals, rows, _MATRIX_MAX_ROWS)
+    column_labels = _ordered_labels(column_totals, columns, _MATRIX_MAX_COLUMNS)
+    # None, not 0.0: an empty cell means that combination never occurred, which
+    # is different from it having summed to zero.
+    chart["rows"] = row_labels
+    chart["columns"] = column_labels
+    chart["matrix"] = [[values.get((r, c)) for c in column_labels] for r in row_labels]
+
+    lines = []
+    for row_label, row_values in zip(row_labels, chart["matrix"], strict=True):
+        cells = ", ".join(f"{c}: {v}" for c, v in zip(column_labels, row_values, strict=True)
+                          if v is not None)
+        lines.append(f"{row_label} — {cells}")
+    summary = "\n".join(lines)
+    dropped = (len(row_totals) - len(row_labels), len(column_totals) - len(column_labels))
+    if any(dropped):
+        summary += (f"\n\n[Truncated to the largest {len(row_labels)} {rows} values and "
+                    f"{len(column_labels)} {columns} values; {dropped[0]} {rows} and "
+                    f"{dropped[1]} {columns} groups are not shown, so row and column totals "
+                    "here are not totals for the whole period.]")
+    return ToolResult(summary, chart=chart)
 
 
 def _previous_period(start_date: str, end_date: str) -> tuple[str, str]:

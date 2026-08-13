@@ -9,6 +9,7 @@ from components import (
     _report_table_html,
     _svg_line_chart,
     build_report_html,
+    render_matrix_table_html,
 )
 from contracts import MetricFormat
 
@@ -76,6 +77,38 @@ class TestFormatMetricValue:
     def test_days_carry_their_unit_and_ignore_digits(self):
         assert _format_metric_value(3.98, MetricFormat.DAYS, 0) == "4.0 days"
         assert _format_metric_value(3.98, MetricFormat.DAYS, 2) == "4.0 days"
+
+
+class TestMatrixTableHtml:
+    @staticmethod
+    def _chart(matrix, fmt=MetricFormat.MONEY):
+        return {"row_label": "Month", "rows": ["2025-01", "2025-02"],
+                "columns": ["Technology", "Furniture"], "matrix": matrix, "format": fmt}
+
+    def test_both_axes_and_the_row_label_appear(self):
+        out = render_matrix_table_html(self._chart([[10.0, 20.0], [30.0, 40.0]]))
+        for label in ("Month", "2025-01", "2025-02", "Technology", "Furniture"):
+            assert label in out
+
+    def test_values_are_formatted_per_the_metric(self):
+        assert "$1,234" in render_matrix_table_html(self._chart([[1234.0, 1.0], [1.0, 1.0]]))
+        assert "15.3%" in render_matrix_table_html(
+            self._chart([[0.153, 0.1], [0.1, 0.1]], MetricFormat.PERCENT))
+
+    def test_a_missing_combination_renders_empty_rather_than_as_zero(self):
+        out = render_matrix_table_html(self._chart([[10.0, None], [30.0, 40.0]]))
+        assert "<td></td>" in out
+        assert "$0" not in out
+
+    def test_labels_are_escaped(self):
+        chart = self._chart([[1.0, 1.0], [1.0, 1.0]])
+        chart["columns"] = ["<script>", "Furniture"]
+        assert "<script>" not in render_matrix_table_html(chart)
+
+    def test_an_all_empty_matrix_does_not_crash_the_shading(self):
+        # min()/max() over no values — the shading range has to degrade
+        # gracefully rather than raise.
+        assert render_matrix_table_html(self._chart([[None, None], [None, None]]))
 
 
 class TestBreakdownTableHtml:
